@@ -1,4 +1,9 @@
-# Developer Notes: environment constraint
+# Developer Notes: environment constraint (original Python build)
+
+> The API was later ported from Python to Java — see
+> `docs/JAVA_PORT_NOTES.md` for the equivalent stack-substitution table.
+> This file documents the original Python build's constraints for
+> historical context.
 
 This build environment's network egress policy blocks PyPI (`pip install` fails
 with `403 host_not_allowed`). So instead of FastAPI + `python-jose` +

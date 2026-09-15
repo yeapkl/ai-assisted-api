@@ -1,8 +1,12 @@
 # QA Verification Report — Authenticated Hello World API
 
+> This report covers the original Python implementation. The API was later
+> ported to Java (`mvn test`), carrying over the same 22 test cases with
+> equivalent coverage — see `docs/JAVA_PORT_NOTES.md`.
+
 **Verdict: PASS** (22/22 tests) — one bug found and fixed during this run.
 
-**Run with:** `python3 -m unittest tests.test_api -v`
+**Run with:** `python3 -m unittest tests.test_api -v` (original Python build)
 
 ## Requirement → test coverage
 

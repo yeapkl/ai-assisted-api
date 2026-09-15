@@ -6,22 +6,30 @@ current server time.
 
 Built by a simulated BA → Developer → QA → Pentester → Reviewer pipeline —
 see `docs/` for each phase's output (technical requirements, pentest
-report, final review, and `DEV_NOTES.md` explaining an environment-driven
-stack substitution).
+report, final review). The implementation was later ported from Python to
+Java 21, preserving behavior and the full test suite — see
+`docs/JAVA_PORT_NOTES.md`.
 
 ## Quick start
 
 ```bash
-pip install -r requirements.txt   # Flask, pydantic, pydantic-settings, gunicorn
 cp .env.example .env
 # edit .env: set JWT_SECRET_KEY to a real random value, e.g.
-python3 -c "import secrets; print(secrets.token_hex(32))"
+openssl rand -hex 32
 
-python -m app.main                # dev server on http://localhost:8000
+mvn compile exec:java -Dexec.mainClass=app.Main   # dev server on http://localhost:8000
 ```
 
-Production: `gunicorn -w 4 -b 0.0.0.0:8000 app.main:app` behind TLS/a reverse
-proxy, with `APP_ENV=production` in the environment.
+Production: build a jar and run it behind TLS/a reverse proxy, with
+`APP_ENV=production` in the environment:
+
+```bash
+mvn package -DskipTests
+JWT_SECRET_KEY=... APP_ENV=production java -jar target/hello-world-api.jar
+```
+
+The server uses a virtual-thread-per-request executor (Java 21), so no
+separate multi-worker process manager (like gunicorn) is needed.
 
 ## Try it
 
@@ -38,13 +46,13 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 
 # Call the protected endpoint
 curl http://localhost:8000/api/v1/hello -H "Authorization: Bearer <access_token>"
-# => {"message": "Hello, alice!", "server_time_utc": "2026-09-15T15:32:22...+00:00"}
+# => {"message": "Hello, alice!", "server_time_utc": "2026-09-15T15:32:22...Z"}
 ```
 
 ## Run the tests
 
 ```bash
-python3 -m unittest tests.test_api -v
+mvn test
 ```
 
 ## Endpoints
@@ -57,13 +65,30 @@ python3 -m unittest tests.test_api -v
 | POST | `/api/v1/auth/refresh` | none | Exchange refresh token for new access token (rate-limited) |
 | GET | `/api/v1/hello` | Bearer access token | Returns greeting + current UTC time |
 
+## Project layout
+
+```
+src/main/java/app/
+  Config.java       — environment-driven configuration
+  Security.java     — password hashing (PBKDF2) + JWT issuance/verification
+  Store.java        — in-memory user store
+  RateLimiter.java  — in-process sliding-window rate limiter
+  JsonUtil.java      — minimal flat-JSON parse/write (no external dependency)
+  ApiServer.java    — routes, request handling, security headers
+  Main.java         — entry point
+src/test/java/app/
+  SecurityTest.java        — unit tests for crypto/JWT
+  ApiIntegrationTest.java  — integration tests against a real running server
+```
+
 ## Documentation index
 
 - `docs/requirements/hello-world-api.md` — BA's technical requirements from the business ask
-- `docs/DEV_NOTES.md` — why this uses Flask + stdlib crypto instead of the originally planned FastAPI/jose/passlib stack
-- `docs/qa/hello-world-api-report.md` — QA verification report (22/22 tests, one bug found & fixed)
-- `docs/pentest/hello-world-api-report.md` — pentest findings, including one real vulnerability found and fixed
-- `docs/review/hello-world-api-review.md` — final reviewer sign-off
+- `docs/JAVA_PORT_NOTES.md` — how and why this was ported from Python to Java
+- `docs/DEV_NOTES.md` — original (Python) dev notes on the environment-driven stack substitution
+- `docs/qa/hello-world-api-report.md` — QA verification report (from the original Python build)
+- `docs/pentest/hello-world-api-report.md` — pentest findings, including one real vulnerability found and fixed (ported and re-verified in Java — see `docs/JAVA_PORT_NOTES.md`)
+- `docs/review/hello-world-api-review.md` — final reviewer sign-off (original Python build)
 - `docs/BEST_PRACTICES_AND_ROADMAP.md` — best practices applied + improvement plan for production
 
 ## The agent pipeline
