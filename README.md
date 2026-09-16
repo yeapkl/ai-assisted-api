@@ -6,22 +6,38 @@ current server time.
 
 Built by a simulated BA → Developer → QA → Pentester → Reviewer pipeline —
 see `docs/` for each phase's output (technical requirements, pentest
-report, final review, and `DEV_NOTES.md` explaining an environment-driven
-stack substitution).
+report, final review). The implementation was first ported from Python to
+a zero-dependency Java 21 build (see `docs/JAVA_PORT_NOTES.md`), then
+rebuilt on **Spring Boot 3.x / Java 21**, delegating every cross-cutting
+concern (JSON, JWT, password hashing, rate limiting, request validation,
+security headers/CORS) to an established library instead of hand-rolled
+code — see `docs/requirements/hello-world-api.md` (2026-09 revision) and
+`docs/JAVA_PORT_NOTES.md` for that migration's rationale.
 
 ## Quick start
 
 ```bash
-pip install -r requirements.txt   # Flask, pydantic, pydantic-settings, gunicorn
 cp .env.example .env
 # edit .env: set JWT_SECRET_KEY to a real random value, e.g.
-python3 -c "import secrets; print(secrets.token_hex(32))"
+openssl rand -hex 32
 
-python -m app.main                # dev server on http://localhost:8000
+mvn spring-boot:run   # dev server on http://localhost:8000
 ```
 
-Production: `gunicorn -w 4 -b 0.0.0.0:8000 app.main:app` behind TLS/a reverse
-proxy, with `APP_ENV=production` in the environment.
+`.env` is picked up automatically on startup (see
+`com.apitest.ApiApplication`) — no need to `export`/`source` it yourself,
+though real process environment variables always take precedence over it.
+
+Production: build a jar and run it behind TLS/a reverse proxy, with
+`APP_ENV=production` in the environment:
+
+```bash
+mvn package -DskipTests
+JWT_SECRET_KEY=... APP_ENV=production java -jar target/hello-world-api.jar
+```
+
+The server runs on an embedded Tomcat (Spring Boot's default), configured
+via `src/main/resources/application.yml`.
 
 ## Try it
 
@@ -38,13 +54,14 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 
 # Call the protected endpoint
 curl http://localhost:8000/api/v1/hello -H "Authorization: Bearer <access_token>"
-# => {"message": "Hello, alice!", "server_time_utc": "2026-09-15T15:32:22...+00:00"}
+# => {"message": "Hello, alice!", "server_time_utc": "2026-09-15T15:32:22...Z"}
 ```
 
 ## Run the tests
 
 ```bash
-python3 -m unittest tests.test_api -v
+mvn test        # unit + Spring Boot integration tests (random port, real HTTP calls)
+mvn package     # test + build target/hello-world-api.jar
 ```
 
 ## Endpoints
@@ -57,13 +74,40 @@ python3 -m unittest tests.test_api -v
 | POST | `/api/v1/auth/refresh` | none | Exchange refresh token for new access token (rate-limited) |
 | GET | `/api/v1/hello` | Bearer access token | Returns greeting + current UTC time |
 
+## Project layout
+
+```
+src/main/java/com/apitest/
+  ApiApplication.java          — @SpringBootApplication entry point (+ optional .env loader)
+  config/AppProperties.java    — environment-driven configuration, fails fast if JWT_SECRET_KEY missing/short
+  config/SecurityConfig.java   — PasswordEncoder bean, Spring Security header/CORS config
+  security/JwtService.java     — JWT issuance/verification (io.jsonwebtoken:jjwt)
+  security/PasswordService.java— password hashing (Spring Security BCryptPasswordEncoder) + NFR-4 dummy hash
+  store/UserStore.java         — in-memory user store
+  filter/JwtAuthFilter.java    — bearer-token auth check for /api/v1/hello
+  filter/RateLimitFilter.java  — Bucket4j-based rate limiting for /api/v1/auth/*
+  web/AuthController.java      — register/login/refresh
+  web/HelloController.java     — protected greeting endpoint
+  web/HealthController.java    — liveness check
+  web/GlobalExceptionHandler.java — maps validation/malformed-body/method-not-allowed to the API's error shape
+  web/dto/                     — request DTOs with Jakarta Bean Validation annotations
+src/main/resources/application.yml — server port, app.* config bound to env vars
+src/test/java/com/apitest/
+  ApiIntegrationTest.java  — sanity tests against a real running embedded server
+```
+
+The earlier zero-dependency `com.sun.net.httpserver`-based Java port
+(`src/main/java/app/*`) has been retired in favor of this Spring Boot
+implementation — see `docs/JAVA_PORT_NOTES.md`.
+
 ## Documentation index
 
 - `docs/requirements/hello-world-api.md` — BA's technical requirements from the business ask
-- `docs/DEV_NOTES.md` — why this uses Flask + stdlib crypto instead of the originally planned FastAPI/jose/passlib stack
-- `docs/qa/hello-world-api-report.md` — QA verification report (22/22 tests, one bug found & fixed)
-- `docs/pentest/hello-world-api-report.md` — pentest findings, including one real vulnerability found and fixed
-- `docs/review/hello-world-api-review.md` — final reviewer sign-off
+- `docs/JAVA_PORT_NOTES.md` — how and why this was ported from Python to Java
+- `docs/DEV_NOTES.md` — original (Python) dev notes on the environment-driven stack substitution
+- `docs/qa/hello-world-api-report.md` — QA verification report (from the original Python build)
+- `docs/pentest/hello-world-api-report.md` — pentest findings, including one real vulnerability found and fixed (ported and re-verified in Java — see `docs/JAVA_PORT_NOTES.md`)
+- `docs/review/hello-world-api-review.md` — final reviewer sign-off (original Python build)
 - `docs/BEST_PRACTICES_AND_ROADMAP.md` — best practices applied + improvement plan for production
 
 ## The agent pipeline
