@@ -793,4 +793,78 @@ class QaVerificationTest {
         assertNotEquals(500, resp.statusCode(),
                 "an unsupported Content-Type must be a 4xx client error, not 500 Internal Server Error: " + resp.body());
     }
+
+    // ---------------------------------------------------------------
+    // Re-verification pass (round 2): edge cases around the 404/415 fixes
+    // for the previously-found Bug 3 / Bug 4, and the NFR-5 rate-limit
+    // fix's opt-in "trust-x-forwarded-for" path. These were manually
+    // verified live against the packaged jar during re-verification;
+    // added here as permanent regression guards.
+    // ---------------------------------------------------------------
+
+    @Test
+    void general_unmappedRouteMatchingExistingPrefixButWrongSubPathReturns404() throws Exception {
+        // /api/v1/auth/* is a real, mapped prefix (register/login/refresh) - a
+        // sibling sub-path that isn't one of those three handlers must still be
+        // a clean 404, not fall through to some other handler or a 500.
+        HttpResponse<String> resp = get("/api/v1/auth/this-is-not-a-real-auth-endpoint", null);
+        assertEquals(404, resp.statusCode(), "body: " + resp.body());
+        assertTrue(resp.body().contains("Not found"), "body: " + resp.body());
+    }
+
+    @Test
+    void general_unmappedRouteReturns404RegardlessOfHttpMethod() throws Exception {
+        // A 404 for an unmapped route must not depend on which verb is used -
+        // it should never be reported as 405 (that status is reserved for a
+        // real route hit with the wrong method) nor 500.
+        for (String verb : List.of("GET", "POST", "PUT", "DELETE", "PATCH")) {
+            HttpResponse<String> resp = method(verb, "/api/v1/totally-bogus-route", null);
+            assertEquals(404, resp.statusCode(),
+                    verb + " to an unmapped route should be 404, got " + resp.statusCode() + ": " + resp.body());
+        }
+    }
+
+    @Test
+    void general_existingRouteWrongMethodStaysDistinctFrom404() throws Exception {
+        // Regression guard: the 404 fix must not have collapsed the existing
+        // 405 "wrong method on a real route" behavior into 404.
+        HttpResponse<String> resp = method("DELETE", "/health", null);
+        assertEquals(405, resp.statusCode(), "body: " + resp.body());
+    }
+
+    @Test
+    void general_healthEndpointIgnoresContentTypeHeaderOnGetRequest() throws Exception {
+        // /health is GET-only with no request body; an (irrelevant) bad
+        // Content-Type header on a bodyless GET must not trip the 415 handler
+        // meant for JSON POST endpoints - it should behave exactly as a normal
+        // GET /health call (FR-7: unauthenticated liveness check).
+        HttpRequest req = HttpRequest.newBuilder(URI.create(url("/health")))
+                .header("Content-Type", "text/plain")
+                .GET()
+                .build();
+        HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, resp.statusCode(), "body: " + resp.body());
+    }
+
+    @Test
+    void general_unsupportedContentTypeMultipartFormDataRejectedWith415() throws Exception {
+        HttpResponse<String> resp = rawPost("/api/v1/auth/login", "multipart/form-data; boundary=x", "stuff");
+        assertEquals(415, resp.statusCode(), "body: " + resp.body());
+    }
+
+    @Test
+    void general_unsupportedContentTypeMissingEntirelyRejectedWith415() throws Exception {
+        HttpResponse<String> resp = rawPost("/api/v1/auth/login", null, "{\"username\":\"a\",\"password\":\"b\"}");
+        assertEquals(415, resp.statusCode(), "body: " + resp.body());
+    }
+
+    @Test
+    void general_jsonContentTypeWithCharsetSuffixStillAccepted() throws Exception {
+        // Regression guard: the 415 fix must not have become so strict that it
+        // rejects the common, legitimate `application/json;charset=utf-8` form
+        // (should reach normal auth handling - 401 for bad creds - not 415).
+        HttpResponse<String> resp = rawPost("/api/v1/auth/login", "application/json;charset=utf-8",
+                mapper.writeValueAsString(Map.of("username", "nobody", "password", "wrongpassword")));
+        assertNotEquals(415, resp.statusCode(), "body: " + resp.body());
+    }
 }
