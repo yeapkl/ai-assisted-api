@@ -1,0 +1,30 @@
+server:
+  port: ${PORT:8000}
+
+spring:
+  application:
+    name: hello-world-api
+  # We answer validation failures ourselves (422, see GlobalExceptionHandler),
+  # so we don't need Spring's default MVC problem-detail responses.
+  mvc:
+    problemdetails:
+      enabled: false
+
+# App-specific, environment-driven configuration (NFR-2). Same env var names
+# as the pre-Spring-Boot implementation: JWT_SECRET_KEY, ACCESS_TOKEN_EXPIRE_MINUTES,
+# REFRESH_TOKEN_EXPIRE_DAYS, APP_ENV, CORS_ALLOWED_ORIGINS. Bound into
+# config.AppProperties, which fails fast at startup if JWT_SECRET_KEY is
+# missing or under 32 characters — same behavior as the old Config.java.
+app:
+  jwt-secret-key: ${JWT_SECRET_KEY:}
+  access-token-expire-minutes: ${ACCESS_TOKEN_EXPIRE_MINUTES:15}
+  refresh-token-expire-days: ${REFRESH_TOKEN_EXPIRE_DAYS:7}
+  app-env: ${APP_ENV:development}
+  cors-allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+
+logging:
+  level:
+    # NFR-9: never log request/response bodies (which would include passwords
+    # and tokens) — keep Spring MVC/Security logging at default (no DEBUG
+    # payload logging) in every environment.
+    root: INFO

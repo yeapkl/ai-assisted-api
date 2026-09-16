@@ -6,9 +6,13 @@ current server time.
 
 Built by a simulated BA → Developer → QA → Pentester → Reviewer pipeline —
 see `docs/` for each phase's output (technical requirements, pentest
-report, final review). The implementation was later ported from Python to
-Java 21, preserving behavior and the full test suite — see
-`docs/JAVA_PORT_NOTES.md`.
+report, final review). The implementation was first ported from Python to
+a zero-dependency Java 21 build (see `docs/JAVA_PORT_NOTES.md`), then
+rebuilt on **Spring Boot 3.x / Java 21**, delegating every cross-cutting
+concern (JSON, JWT, password hashing, rate limiting, request validation,
+security headers/CORS) to an established library instead of hand-rolled
+code — see `docs/requirements/hello-world-api.md` (2026-09 revision) and
+`docs/JAVA_PORT_NOTES.md` for that migration's rationale.
 
 ## Quick start
 
@@ -17,8 +21,12 @@ cp .env.example .env
 # edit .env: set JWT_SECRET_KEY to a real random value, e.g.
 openssl rand -hex 32
 
-mvn compile exec:java -Dexec.mainClass=app.Main   # dev server on http://localhost:8000
+mvn spring-boot:run   # dev server on http://localhost:8000
 ```
+
+`.env` is picked up automatically on startup (see
+`com.apitest.ApiApplication`) — no need to `export`/`source` it yourself,
+though real process environment variables always take precedence over it.
 
 Production: build a jar and run it behind TLS/a reverse proxy, with
 `APP_ENV=production` in the environment:
@@ -28,8 +36,8 @@ mvn package -DskipTests
 JWT_SECRET_KEY=... APP_ENV=production java -jar target/hello-world-api.jar
 ```
 
-The server uses a virtual-thread-per-request executor (Java 21), so no
-separate multi-worker process manager (like gunicorn) is needed.
+The server runs on an embedded Tomcat (Spring Boot's default), configured
+via `src/main/resources/application.yml`.
 
 ## Try it
 
@@ -52,7 +60,8 @@ curl http://localhost:8000/api/v1/hello -H "Authorization: Bearer <access_token>
 ## Run the tests
 
 ```bash
-mvn test
+mvn test        # unit + Spring Boot integration tests (random port, real HTTP calls)
+mvn package     # test + build target/hello-world-api.jar
 ```
 
 ## Endpoints
@@ -68,18 +77,28 @@ mvn test
 ## Project layout
 
 ```
-src/main/java/app/
-  Config.java       — environment-driven configuration
-  Security.java     — password hashing (PBKDF2) + JWT issuance/verification
-  Store.java        — in-memory user store
-  RateLimiter.java  — in-process sliding-window rate limiter
-  JsonUtil.java      — minimal flat-JSON parse/write (no external dependency)
-  ApiServer.java    — routes, request handling, security headers
-  Main.java         — entry point
-src/test/java/app/
-  SecurityTest.java        — unit tests for crypto/JWT
-  ApiIntegrationTest.java  — integration tests against a real running server
+src/main/java/com/apitest/
+  ApiApplication.java          — @SpringBootApplication entry point (+ optional .env loader)
+  config/AppProperties.java    — environment-driven configuration, fails fast if JWT_SECRET_KEY missing/short
+  config/SecurityConfig.java   — PasswordEncoder bean, Spring Security header/CORS config
+  security/JwtService.java     — JWT issuance/verification (io.jsonwebtoken:jjwt)
+  security/PasswordService.java— password hashing (Spring Security BCryptPasswordEncoder) + NFR-4 dummy hash
+  store/UserStore.java         — in-memory user store
+  filter/JwtAuthFilter.java    — bearer-token auth check for /api/v1/hello
+  filter/RateLimitFilter.java  — Bucket4j-based rate limiting for /api/v1/auth/*
+  web/AuthController.java      — register/login/refresh
+  web/HelloController.java     — protected greeting endpoint
+  web/HealthController.java    — liveness check
+  web/GlobalExceptionHandler.java — maps validation/malformed-body/method-not-allowed to the API's error shape
+  web/dto/                     — request DTOs with Jakarta Bean Validation annotations
+src/main/resources/application.yml — server port, app.* config bound to env vars
+src/test/java/com/apitest/
+  ApiIntegrationTest.java  — sanity tests against a real running embedded server
 ```
+
+The earlier zero-dependency `com.sun.net.httpserver`-based Java port
+(`src/main/java/app/*`) has been retired in favor of this Spring Boot
+implementation — see `docs/JAVA_PORT_NOTES.md`.
 
 ## Documentation index
 

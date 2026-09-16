@@ -1,4 +1,6 @@
-package app;
+package com.apitest.store;
+
+import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -9,7 +11,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * (e.g. Postgres) before production use. Data does not persist across
  * restarts.
  */
-public final class Store {
+@Component
+public class UserStore {
 
     public record User(String username, String hashedPassword) {
     }
@@ -33,6 +36,7 @@ public final class Store {
         return user;
     }
 
+    /** Test-only: clears all users between test cases. Never called from production code paths. */
     public void clear() {
         users.clear();
     }

@@ -33,7 +33,41 @@ them, including the two security-relevant fixes from the original pipeline:
   is always compared against for unknown usernames, so the password-hash
   comparison always runs — ported verbatim into `ApiServer.handleLogin`.
 
-## Why zero runtime dependencies again
+## Update (2026-09): the zero-runtime-dependency posture has been superseded
+
+The reasoning below is kept for historical context, but it no longer
+reflects the current codebase. A 2026-09 revision to
+`docs/requirements/hello-world-api.md` (see NFR-11 and §6 "Handoff to
+Developer" in that doc) directed the opposite approach: Maven Central is
+reachable from this environment, so "small enough to audit" was judged not
+to be a sufficient reason to keep hand-rolling security-critical or
+cross-cutting primitives indefinitely — an actively-maintained library
+gets patched for vulnerabilities the in-house code here never would be.
+
+The API has since been rebuilt on **Spring Boot 3.x / Java 21**
+(`src/main/java/com/apitest/`), replacing every hand-rolled primitive
+described below with an established library, with no functional/behavioral
+change:
+
+| Concern | Was (this doc, below) | Now |
+|---|---|---|
+| Web/HTTP layer | `com.sun.net.httpserver` | `spring-boot-starter-web` |
+| JSON | hand-rolled `JsonUtil` parser | Jackson (via `spring-boot-starter-web`) |
+| JWT | hand-rolled HS256 (`javax.crypto.Mac`) | `io.jsonwebtoken:jjwt` |
+| Password hashing | hand-rolled PBKDF2 | Spring Security `BCryptPasswordEncoder` |
+| Rate limiting | hand-rolled sliding window | Bucket4j |
+| Request validation | manual field checks | Jakarta Bean Validation |
+| Security headers/CORS | hand-written filter | Spring Security header/CORS config |
+
+The old `com.sun.net.httpserver`-based implementation described in the rest
+of this document (`src/main/java/app/*`, `src/test/java/app/*`) has been
+deleted from the tree; this file is retained as a historical record of the
+Python→Java port and the (now-superseded) rationale for that port's
+dependency posture. See `docs/requirements/hello-world-api.md` for the
+current requirements and `README.md` for how to build/run the current
+Spring Boot implementation.
+
+## Why zero runtime dependencies again (superseded — see update above)
 
 The original Python build used only Flask (already installed) plus the
 standard library, because this environment's network policy blocked PyPI.
@@ -50,3 +84,5 @@ applies — consider swapping the hand-rolled JWT/PBKDF2 code for a
 well-audited library (e.g. `com.auth0:java-jwt`, Spring Security's
 `PasswordEncoder`) if your organization's policy prefers widely-used
 dependencies over in-house crypto glue.
+
+**This caveat was acted on in 2026-09** — see the "Update" section above.
