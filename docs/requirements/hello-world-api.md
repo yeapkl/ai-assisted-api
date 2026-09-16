@@ -3,8 +3,25 @@
 **Author:** BA role · **Input:** High-level business request
 **Business ask:** "Build me an API with authentication, credential handling via API. The API should start with returning Hello World with the current time."
 
+**Revision note (2026-09):** Product owner directive changed the *implementation
+strategy* only: the API must be rebuilt on **Spring Boot**, and every
+cross-cutting concern that was previously hand-rolled (rate limiting, JSON
+parsing, JWT issuance/verification, password hashing, request validation)
+must instead use an established, well-maintained library. No endpoint,
+status code, auth flow, or user-facing behavior changes as part of this
+revision — see the updated Handoff section (§6) and the new NFR-11.
+
 ## 1. Scope
-A minimal but production-shaped REST API demonstrating secure authentication and credential handling, exposing one protected business endpoint (`Hello World` + server time).
+A minimal but production-shaped REST API demonstrating secure authentication
+and credential handling, exposing one protected business endpoint
+(`Hello World` + server time). As of this revision, the API is built on
+Spring Boot 3.x / Java 21, delegating every security-critical or
+cross-cutting primitive (JSON, JWT, password hashing, rate limiting,
+validation) to an established library rather than in-house code. In scope:
+the functional and non-functional requirements below, unchanged in
+behavior. Out of scope: any change to endpoints, request/response shapes,
+status codes, or auth semantics — this revision is implementation strategy
+only, not a behavior change.
 
 ## 2. Functional Requirements
 
@@ -22,22 +39,94 @@ A minimal but production-shaped REST API demonstrating secure authentication and
 
 | ID | Requirement |
 |----|-------------|
-| NFR-1 | Passwords stored only as salted bcrypt hashes — never plaintext, never logged. |
-| NFR-2 | JWT signing secret loaded from environment/`.env`, never hardcoded, never committed. |
+| NFR-1 | Passwords stored only as salted hashes produced by an established password-hashing library exposed through Spring Security's `PasswordEncoder` abstraction (e.g. `BCryptPasswordEncoder`) — never plaintext, never logged, never a hand-rolled hashing routine. |
+| NFR-2 | JWT signing secret loaded from environment/`.env`, never hardcoded, never committed; access and refresh tokens are issued and verified using an established JWT library (e.g. `io.jsonwebtoken:jjwt`, Nimbus JOSE+JWT, or Spring Security's OAuth2 resource server support), not hand-rolled HMAC signing/parsing code. |
 | NFR-3 | Access tokens expire in 15 min; refresh tokens in 7 days. |
-| NFR-4 | All auth failures return generic `401`, no user-enumeration hints. |
-| NFR-5 | Rate limiting on `/auth/*` endpoints to reduce brute-force risk. |
-| NFR-6 | Security headers on all responses (HSTS, X-Content-Type-Options, etc.). |
-| NFR-7 | Input validated via typed schemas (Pydantic); reject malformed payloads with `422`. |
+| NFR-4 | All auth failures return generic `401`, no user-enumeration hints (identical response for unknown username vs. wrong password; a fixed dummy hash comparison runs on the unknown-username path so response timing does not leak which case occurred). |
+| NFR-5 | Rate limiting on `/auth/*` endpoints is implemented with an established rate-limiting library (e.g. Bucket4j or Resilience4j `RateLimiter`), not an in-house sliding-window implementation, to reduce brute-force risk. |
+| NFR-6 | Security headers on all responses (HSTS, X-Content-Type-Options, etc.), applied via Spring Security's standard header configuration rather than hand-written response-header code. |
+| NFR-7 | Input validated via Jakarta Bean Validation annotations (`spring-boot-starter-validation`, e.g. `@NotBlank`, `@Size`, `@Pattern` on request DTOs) rather than manual field-by-field checks; reject malformed payloads with `422` and a field-level error body. |
 | NFR-8 | CORS explicit allow-list, not wildcard, when credentials are involved. |
-| NFR-9 | No sensitive data (passwords, tokens) in application logs. |
-| NFR-10 | Dependency and static-security scan run before release. |
+| NFR-9 | No sensitive data (passwords, tokens, JWT secret) in application logs or error responses. |
+| NFR-10 | Dependency and static-security scan run before release (now meaningful in practice, since the dependency tree is no longer empty). |
+| NFR-11 | No hand-rolled implementations of security-critical or cross-cutting primitives — JSON parsing/serialization, JWT issuance/verification, password hashing, rate limiting, and request validation must each be delegated to an established, actively-maintained library named in §6, not custom/in-house code. Verifiable by inspecting the build file's dependency list and confirming the codebase contains no custom JSON parser, custom JWT signer/verifier, custom password-hashing routine, or custom sliding-window/token-bucket limiter. |
 
 ## 4. Out of Scope (flagged for improvement plan)
 - Persistent database (demo uses in-memory store — swap for Postgres in production).
 - Full OAuth2/social login, MFA, password-reset flow.
-- Distributed rate limiting (demo uses in-process limiter).
+- Distributed/shared-state rate limiting across multiple instances (this
+  revision requires a real rate-limiting *library*, e.g. Bucket4j, but it
+  is still configured as an in-process/in-memory limiter; a
+  Redis-backed distributed limiter remains a production improvement item).
+- Migrating or deleting the prior hand-rolled Java implementation
+  (`com.sun.net.httpserver` + hand-rolled JSON/JWT/PBKDF2/rate-limiter,
+  see `docs/JAVA_PORT_NOTES.md`) is not specified here; that decision
+  (retire vs. keep as a reference/benchmark) is left to the team.
 
-## 5. Handoff to Developer
-Stack: **Python 3.11 + FastAPI** (async, typed, auto OpenAPI docs — good fit for a small secure demo).
-Auth: **OAuth2 Password flow + JWT (HS256)**, `passlib[bcrypt]` for hashing.
+## 5. Assumptions
+Judgment calls made where the product owner's directive named a category
+of library but not a single specific product:
+
+- **Password hashing algorithm:** NFR-1 has always said "bcrypt hashes,"
+  even though the intervening hand-rolled Java port actually used PBKDF2.
+  This revision assumes **Spring Security's `BCryptPasswordEncoder`** as
+  the default, honoring the original NFR-1 wording. `Pbkdf2PasswordEncoder`
+  is an acceptable substitute if the organization has a policy reason
+  (e.g. FIPS compliance) to prefer PBKDF2 — either is "an established
+  library," satisfying NFR-1 and NFR-11.
+- **JWT library:** Recommend **`io.jsonwebtoken:jjwt`** (`jjwt-api` +
+  `jjwt-impl` + `jjwt-jackson`) for HS256 signing/verification, since this
+  API is both the token *issuer* and *verifier* for a single symmetric
+  secret — a good fit for jjwt's simple `Jwts.builder()`/`Jwts.parser()`
+  API. Nimbus JOSE+JWT is an acceptable alternative. Spring Security's
+  OAuth2 Resource Server support is intentionally *not* mandated as the
+  primary choice: it's designed for verifying tokens from an external
+  issuer, and using it here as issuer-and-verifier would additionally
+  require Spring Authorization Server or custom `JwtEncoder` wiring —
+  more machinery than this demo API needs. Whichever is chosen must
+  satisfy FR-1, FR-2, FR-6, NFR-2, and NFR-3 unchanged.
+- **Rate-limiting library:** Recommend **Bucket4j** (token-bucket,
+  in-memory `ProxyManager`, easy per-key/per-endpoint configuration) as
+  the primary choice for NFR-5. Resilience4j's `RateLimiter` is an
+  acceptable alternative, particularly if the team already depends on
+  Resilience4j elsewhere (e.g. circuit breakers).
+- **Validation error status code:** Spring Boot's default handling of
+  `@Valid` failures (`MethodArgumentNotValidException`) returns HTTP `400`,
+  not the `422` required by NFR-7. Preserving NFR-7's existing behavior
+  unchanged requires the developer to add an explicit
+  `@ControllerAdvice`/`@ExceptionHandler` that maps validation failures to
+  `422` with a field-level error body — flagged here so it isn't missed
+  simply because it's "the framework default."
+- **Spring Boot version pin:** "Spring Boot 3.x" is intentionally not
+  pinned to an exact minor version; assume the latest stable Spring Boot
+  3.x release available at implementation time that supports Java 21
+  (Spring Boot 3.2+).
+
+## 6. Handoff to Developer
+**Stack (mandatory):** **Spring Boot 3.x + Java 21**. The zero-runtime-dependency
+posture of the earlier hand-rolled Java port (see `docs/JAVA_PORT_NOTES.md`)
+is explicitly superseded by this directive — Maven Central is reachable
+from this environment, and "small enough to audit" is no longer an
+acceptable reason to hand-roll a security-critical or cross-cutting
+primitive. For each concern currently hand-rolled, use the following (or
+a documented equivalent per §5 Assumptions), matching the FR/NFR each
+satisfies:
+
+| Concern | Hand-rolled today | Required library | Satisfies |
+|---|---|---|---|
+| Web/HTTP layer | `com.sun.net.httpserver` | `spring-boot-starter-web` | FR-1..FR-7 |
+| JSON parsing/serialization | Hand-rolled JSON parser | **Jackson** (ships with `spring-boot-starter-web`) | FR-3, FR-4, FR-5, FR-6, NFR-7, NFR-11 |
+| JWT issuance/verification | Hand-rolled HS256 (`javax.crypto.Mac`) | **`io.jsonwebtoken:jjwt`** (or Nimbus JOSE+JWT — see Assumptions) | FR-1, FR-2, FR-6, NFR-2, NFR-3, NFR-11 |
+| Password hashing | Hand-rolled PBKDF2 | **Spring Security `PasswordEncoder`** (`BCryptPasswordEncoder`, or `Pbkdf2PasswordEncoder` per Assumptions) | FR-4, NFR-1, NFR-11 |
+| Rate limiting | Hand-rolled sliding window (`RateLimiter.java`) | **Bucket4j** (or Resilience4j `RateLimiter` — see Assumptions) | NFR-5, NFR-11 |
+| Request validation | Manual field checks | **Jakarta Bean Validation** via `spring-boot-starter-validation` | NFR-7, NFR-11 |
+| Security headers / CORS | Hand-written | **Spring Security** default header filters + CORS config | NFR-6, NFR-8 |
+| Secrets/config | `Config.java` env loader | Spring Boot's externalized configuration (`application.yml` + env vars); same "fail fast if `JWT_SECRET_KEY` is missing/short" behavior | NFR-2 |
+| Tests | JUnit 5 (hand-run HTTP client) | JUnit 5 + `spring-boot-starter-test` (`MockMvc` or `@SpringBootTest` with `TestRestTemplate`) | verifies all FR/NFR above |
+
+No new functional behavior is authorized by this revision: endpoints,
+request/response bodies, status codes, token lifetimes, and error-handling
+semantics (FR-1..FR-7, NFR-1..NFR-10) must match the existing, previously
+reviewed behavior exactly; only the underlying implementation technique
+changes, plus the new NFR-11 codifying the "library over hand-rolled code"
+principle itself.
