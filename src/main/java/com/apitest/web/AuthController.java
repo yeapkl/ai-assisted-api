@@ -34,11 +34,16 @@ public class AuthController {
 
     @PostMapping("/register")
     public ResponseEntity<Map<String, String>> register(@Valid @RequestBody RegisterRequest request) {
-        if (userStore.exists(request.username())) {
+        // FR-4: rely solely on UserStore.create's atomic putIfAbsent for the
+        // conflict decision (no separate exists()-then-create()) so concurrent
+        // duplicate registrations can't race past a check-then-act gap and
+        // both succeed. Hashing happens before the atomic insert since it's
+        // needed either way and doesn't affect the atomicity of the insert.
+        UserStore.User created = userStore.create(request.username(), passwordService.hash(request.password()));
+        if (created == null) {
             // NFR-4: generic message, doesn't confirm the username is taken.
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "Registration failed"));
         }
-        userStore.create(request.username(), passwordService.hash(request.password()));
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("message", "User registered successfully"));
     }
 

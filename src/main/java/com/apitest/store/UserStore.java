@@ -30,10 +30,22 @@ public class UserStore {
         return username != null && users.containsKey(username);
     }
 
+    /**
+     * Atomically creates a user iff the username isn't already taken.
+     * Uses {@link ConcurrentHashMap#putIfAbsent} so the check-then-act of
+     * "does this username exist" and "create it" happens as a single atomic
+     * operation, closing a TOCTOU race where concurrent registrations of the
+     * same username could otherwise all succeed and silently overwrite each
+     * other's password hash (FR-4 bug).
+     *
+     * @return the newly created {@link User}, or {@code null} if the
+     *         username was already taken (by a prior call or a concurrent
+     *         racing call that won).
+     */
     public User create(String username, String hashedPassword) {
         User user = new User(username, hashedPassword);
-        users.put(username, user);
-        return user;
+        User previous = users.putIfAbsent(username, user);
+        return previous == null ? user : null;
     }
 
     /** Test-only: clears all users between test cases. Never called from production code paths. */

@@ -9,6 +9,19 @@ spring:
   mvc:
     problemdetails:
       enabled: false
+    # Bug fix: without this, DispatcherServlet silently delegates unmapped
+    # requests to the default static-resource handler instead of raising an
+    # exception, which (combined with resources.add-mappings below) is what
+    # let a request to a nonexistent route fall through to the generic
+    # Exception handler and return 500 instead of 404.
+    throw-exception-if-no-handler-found: true
+  web:
+    resources:
+      # Disable the default "/**" static resource handler mapping so that an
+      # unmapped route actually reaches DispatcherServlet's "no handler
+      # found" path (see throw-exception-if-no-handler-found above) instead
+      # of being swallowed by ResourceHttpRequestHandler.
+      add-mappings: false
 
 # App-specific, environment-driven configuration (NFR-2). Same env var names
 # as the pre-Spring-Boot implementation: JWT_SECRET_KEY, ACCESS_TOKEN_EXPIRE_MINUTES,
@@ -21,6 +34,14 @@ app:
   refresh-token-expire-days: ${REFRESH_TOKEN_EXPIRE_DAYS:7}
   app-env: ${APP_ENV:development}
   cors-allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  rate-limit:
+    # NFR-5: off by default. Only set to true if this app is deployed behind
+    # a trusted reverse proxy that itself sets/overwrites X-Forwarded-For
+    # (never passing through a client-supplied value unmodified). With no
+    # such proxy documented for this deployment, X-Forwarded-For is
+    # client-controlled and must not be trusted for rate-limit keying -
+    # RateLimitFilter falls back to request.getRemoteAddr() when this is false.
+    trust-x-forwarded-for: ${RATE_LIMIT_TRUST_X_FORWARDED_FOR:false}
 
 logging:
   level:

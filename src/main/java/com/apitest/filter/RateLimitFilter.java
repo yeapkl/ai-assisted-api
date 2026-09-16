@@ -7,6 +7,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -40,10 +41,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
     };
 
     private final ObjectMapper objectMapper;
+    private final boolean trustXForwardedFor;
     private final ConcurrentHashMap<String, Bucket> buckets = new ConcurrentHashMap<>();
 
     public RateLimitFilter(ObjectMapper objectMapper) {
+        this(objectMapper, false);
+    }
+
+    public RateLimitFilter(ObjectMapper objectMapper, boolean trustXForwardedFor) {
         this.objectMapper = objectMapper;
+        this.trustXForwardedFor = trustXForwardedFor;
     }
 
     @Override
@@ -84,10 +91,27 @@ public class RateLimitFilter extends OncePerRequestFilter {
         return null;
     }
 
+    /**
+     * NFR-5 bug fix: previously this unconditionally trusted the
+     * client-supplied {@code X-Forwarded-For} header, which let any attacker
+     * fully bypass rate limiting by sending a unique value per request. This
+     * app has no documented reverse proxy in front of it by default (see
+     * docs/requirements/hello-world-api.md, .env.example), so the safe
+     * default is to key on the actual TCP peer address
+     * ({@link HttpServletRequest#getRemoteAddr()}), which the client cannot
+     * spoof. {@code X-Forwarded-For} is only honored when explicitly opted
+     * into via {@code app.rate-limit.trust-x-forwarded-for=true} (off by
+     * default) for real deployments that sit behind a trusted reverse proxy
+     * that overwrites/sets that header itself.
+     */
     private String clientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded;
+        if (trustXForwardedFor) {
+            String forwarded = request.getHeader("X-Forwarded-For");
+            if (forwarded != null && !forwarded.isBlank()) {
+                // Standard convention: the first entry is the original client as seen by
+                // the nearest trusted hop; take it, trimmed, ignoring any further entries.
+                return forwarded.split(",")[0].trim();
+            }
         }
         String remote = request.getRemoteAddr();
         return remote != null ? remote : "unknown";
@@ -111,9 +135,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
     public static class Registration {
 
         @Bean
-        public FilterRegistrationBean<RateLimitFilter> rateLimitFilterRegistration(ObjectMapper objectMapper) {
+        public FilterRegistrationBean<RateLimitFilter> rateLimitFilterRegistration(
+                ObjectMapper objectMapper,
+                @Value("${app.rate-limit.trust-x-forwarded-for:false}") boolean trustXForwardedFor) {
             FilterRegistrationBean<RateLimitFilter> registration =
-                    new FilterRegistrationBean<>(new RateLimitFilter(objectMapper));
+                    new FilterRegistrationBean<>(new RateLimitFilter(objectMapper, trustXForwardedFor));
             registration.addUrlPatterns("/api/v1/auth/*");
             registration.setName("rateLimitFilter");
             return registration;
