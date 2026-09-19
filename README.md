@@ -1,6 +1,6 @@
 # Authenticated Hello World API
 
-[![CI/CD](https://github.com/yeapkl/apitest/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/yeapkl/apitest/actions/workflows/ci-cd.yml)
+[![CI/CD](https://github.com/yeapkl/ai-assisted-api/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/yeapkl/ai-assisted-api/actions/workflows/ci-cd.yml)
 
 A small, security-conscious reference API: register → login (JWT access +
 refresh tokens) → call a protected `Hello World` endpoint that returns the
@@ -47,8 +47,8 @@ Every push to `main` that passes CI builds and publishes an image to GitHub
 Container Registry:
 
 ```bash
-docker pull ghcr.io/yeapkl/apitest:latest
-docker run -p 8000:8000 -e JWT_SECRET_KEY=$(openssl rand -hex 32) ghcr.io/yeapkl/apitest:latest
+docker pull ghcr.io/yeapkl/ai-assisted-api:latest
+docker run -p 8000:8000 -e JWT_SECRET_KEY=$(openssl rand -hex 32) ghcr.io/yeapkl/ai-assisted-api:latest
 ```
 
 Or build it locally from the `Dockerfile`:
