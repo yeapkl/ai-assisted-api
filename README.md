@@ -1,5 +1,7 @@
 # Authenticated Hello World API
 
+[![CI/CD](https://github.com/yeapkl/apitest/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/yeapkl/apitest/actions/workflows/ci-cd.yml)
+
 A small, security-conscious reference API: register → login (JWT access +
 refresh tokens) → call a protected `Hello World` endpoint that returns the
 current server time.
@@ -38,6 +40,23 @@ JWT_SECRET_KEY=... APP_ENV=production java -jar target/hello-world-api.jar
 
 The server runs on an embedded Tomcat (Spring Boot's default), configured
 via `src/main/resources/application.yml`.
+
+### Run with Docker
+
+Every push to `main` that passes CI builds and publishes an image to GitHub
+Container Registry:
+
+```bash
+docker pull ghcr.io/yeapkl/apitest:latest
+docker run -p 8000:8000 -e JWT_SECRET_KEY=$(openssl rand -hex 32) ghcr.io/yeapkl/apitest:latest
+```
+
+Or build it locally from the `Dockerfile`:
+
+```bash
+docker build -t hello-world-api .
+docker run -p 8000:8000 -e JWT_SECRET_KEY=$(openssl rand -hex 32) hello-world-api
+```
 
 ## Try it
 
@@ -94,6 +113,8 @@ src/main/java/com/apitest/
 src/main/resources/application.yml — server port, app.* config bound to env vars
 src/test/java/com/apitest/
   ApiIntegrationTest.java  — sanity tests against a real running embedded server
+Dockerfile, .dockerignore    — multi-stage build, published to GHCR by CI on merge to main
+.github/workflows/ci-cd.yml  — build + test on every push/PR, then Docker image publish on main
 ```
 
 The earlier zero-dependency `com.sun.net.httpserver`-based Java port
