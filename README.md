@@ -16,6 +16,13 @@ security headers/CORS) to an established library instead of hand-rolled
 code — see `docs/requirements/hello-world-api.md` (2026-09 revision) and
 `docs/JAVA_PORT_NOTES.md` for that migration's rationale.
 
+[![MCP Server CI/CD](https://github.com/yeapkl/ai-assisted-api/actions/workflows/mcp-ci-cd.yml/badge.svg)](https://github.com/yeapkl/ai-assisted-api/actions/workflows/mcp-ci-cd.yml)
+
+An [MCP server](mcp-server/README.md) also wraps this API's endpoints as
+tools an AI agent can call directly - see `mcp-server/README.md` and
+`docs/deploy/mcp-server-setup.md` for what it exposes and how to reach it
+(it requires GCP authentication, unlike the main API).
+
 ## Quick start
 
 ```bash
@@ -137,6 +144,9 @@ implementation — see `docs/JAVA_PORT_NOTES.md`.
 - `docs/pentest/hello-world-api-report.md` — pentest findings, including one real vulnerability found and fixed (ported and re-verified in Java — see `docs/JAVA_PORT_NOTES.md`)
 - `docs/review/hello-world-api-review.md` — final reviewer sign-off (original Python build)
 - `docs/BEST_PRACTICES_AND_ROADMAP.md` — best practices applied + improvement plan for production
+- `docs/deploy/gcp-cloud-run-setup.md` — one-time GCP setup for keyless CI/CD deployment (WIF, service accounts, Secret Manager)
+- `docs/deploy/mcp-server-setup.md` — how to reach the MCP server's authenticated Cloud Run endpoint
+- `mcp-server/README.md` — the MCP server that wraps this API's endpoints as AI-agent-callable tools
 
 ## The agent pipeline
 
