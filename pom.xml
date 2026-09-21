@@ -48,6 +48,18 @@
       <artifactId>spring-boot-starter-security</artifactId>
     </dependency>
 
+    <!-- OAuth 2.1 Authorization Server (NFR-13..NFR-20): standards-based
+         /oauth2/authorize, /oauth2/token, and RFC 8414 discovery metadata,
+         additive to the existing JSON auth endpoints. Version is managed by
+         the spring-boot-starter-parent 3.3.4 BOM (currently resolves to
+         spring-security-oauth2-authorization-server 1.3.2) - verified to
+         compile against this project's pinned Spring Boot version per
+         NFR-20, not assumed from documentation. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-oauth2-authorization-server</artifactId>
+    </dependency>
+
     <!-- JWT issuance/verification (FR-1, FR-2, FR-6, NFR-2, NFR-3, NFR-11):
          replaces the hand-rolled HS256 signer/parser in the old Security.java. -->
     <dependency>

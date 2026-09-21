@@ -1,0 +1,35 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: hello-world-mcp-server
+  ai:
+    mcp:
+      server:
+        name: hello-world-mcp-server
+        version: 1.0.0
+        # Stateless Streamable-HTTP: no session pinned to a specific
+        # instance, which matters on Cloud Run (multiple instances,
+        # scale-to-zero, no guaranteed sticky routing).
+        protocol: STATELESS
+        type: SYNC
+
+# Base URL of the Hello World REST API this server wraps as MCP tools.
+# Defaults to the deployed Cloud Run instance; override via API_BASE_URL
+# for local development against a locally running copy.
+api:
+  base-url: ${API_BASE_URL:https://hello-world-api-mz5e3hbozq-uc.a.run.app}
+
+# OAuth 2.1 resource-server config (NFR-1..NFR-4 in docs/requirements/mcp-server.md).
+# issuer-uri defaults to a locally running hello-world-api for local dev;
+# resource-base-url is this server's own externally-reachable URL, used in
+# the RFC 9728 protected-resource metadata and WWW-Authenticate header.
+oauth:
+  issuer-uri: ${OAUTH_ISSUER_URI:http://localhost:8000}
+  resource-audience: ${MCP_RESOURCE_AUDIENCE:mcp-server}
+  resource-base-url: ${MCP_SERVER_BASE_URL:http://localhost:8080}
+
+logging:
+  level:
+    root: INFO

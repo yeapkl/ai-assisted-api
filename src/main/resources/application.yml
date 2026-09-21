@@ -42,6 +42,26 @@ app:
     # client-controlled and must not be trusted for rate-limit keying -
     # RateLimitFilter falls back to request.getRemoteAddr() when this is false.
     trust-x-forwarded-for: ${RATE_LIMIT_TRUST_X_FORWARDED_FOR:false}
+  # OAuth 2.1 Authorization Server (NFR-13..NFR-20), additive - see
+  # com.apitest.oauth.OAuthProperties. Same "env var, fail fast if
+  # missing/short" posture as JWT_SECRET_KEY above.
+  oauth:
+    issuer: ${OAUTH_ISSUER:http://localhost:8000}
+    client-id: ${MCP_OAUTH_CLIENT_ID:mcp-server}
+    client-secret: ${MCP_OAUTH_CLIENT_SECRET:}
+    redirect-uris: ${MCP_OAUTH_REDIRECT_URIS:http://127.0.0.1:8765/callback}
+    resource-audience: ${MCP_OAUTH_RESOURCE_AUDIENCE:mcp-server}
+    # This app's own resource identifier - ALWAYS additionally stamped onto
+    # every issued token on top of resource-audience above, regardless of
+    # that value (QA-flagged gap fix, 2026-09-21) - see
+    # OAuthProperties#getSelfAudience() Javadoc for the full reasoning.
+    self-audience: ${OAUTH_SELF_AUDIENCE:hello-world-api}
+    signing-key-secret: ${OAUTH_SIGNING_KEY_SECRET:}
+    # Separate token-lifetime config surface from app.access-token-expire-minutes
+    # / app.refresh-token-expire-days above (see OAuthProperties Javadoc) -
+    # same 15-minute/7-day defaults (NFR-3's intent), different token family.
+    access-token-expire-minutes: ${OAUTH_ACCESS_TOKEN_EXPIRE_MINUTES:15}
+    refresh-token-expire-days: ${OAUTH_REFRESH_TOKEN_EXPIRE_DAYS:7}
 
 logging:
   level:

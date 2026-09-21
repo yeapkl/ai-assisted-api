@@ -101,6 +101,19 @@ gcloud secrets add-iam-policy-binding jwt-secret-key \
   --member="serviceAccount:${RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 
+# --- OAuth 2.1 Authorization Server addition: two more fail-fast secrets,
+#     same posture as JWT_SECRET_KEY above (never in the workflow file,
+#     never committed) ---
+openssl rand -hex 32 | gcloud secrets create oauth-signing-key-secret --data-file=-
+gcloud secrets add-iam-policy-binding oauth-signing-key-secret \
+  --member="serviceAccount:${RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
+openssl rand -hex 32 | gcloud secrets create mcp-oauth-client-secret --data-file=-
+gcloud secrets add-iam-policy-binding mcp-oauth-client-secret \
+  --member="serviceAccount:${RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
 # --- Print what you need for step 2 ---------------------------------------
 echo "GCP_WORKLOAD_IDENTITY_PROVIDER=projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/providers/${PROVIDER_ID}"
 echo "GCP_SERVICE_ACCOUNT=${DEPLOYER_SA}@${PROJECT_ID}.iam.gserviceaccount.com"
@@ -129,8 +142,15 @@ after `docker-publish` and:
 2. Deploys the just-published `ghcr.io/yeapkl/ai-assisted-api:sha-<commit>`
    image to the `hello-world-api` Cloud Run service, running as the
    `cloud-run-runtime` service account.
-3. Mounts `jwt-secret-key` from Secret Manager as the `JWT_SECRET_KEY` env
-   var — the value is never visible in workflow logs or GitHub secrets.
+3. Mounts `jwt-secret-key`, `oauth-signing-key-secret`, and
+   `mcp-oauth-client-secret` from Secret Manager as the `JWT_SECRET_KEY`,
+   `OAUTH_SIGNING_KEY_SECRET`, and `MCP_OAUTH_CLIENT_SECRET` env vars — none
+   of these values are ever visible in workflow logs or GitHub secrets.
+   `MCP_OAUTH_CLIENT_SECRET`'s value must also be given to whatever MCP
+   client(s)/operators need to complete the `authorization_code` grant as
+   the pre-registered `mcp-server` OAuth client (see
+   `docs/deploy/mcp-server-setup.md`) — sharing it out of band is a
+   deployment-owner decision, not something this workflow automates.
 4. Curls `/health` on the deployed URL as a smoke test.
 
 The service URL is printed in the job's output (and in the GitHub
@@ -152,6 +172,8 @@ previously issued access/refresh token, by design.
 ```bash
 gcloud run services delete hello-world-api --region=us-central1
 gcloud secrets delete jwt-secret-key
+gcloud secrets delete oauth-signing-key-secret
+gcloud secrets delete mcp-oauth-client-secret
 gcloud iam workload-identity-pools providers delete github-provider \
   --location=global --workload-identity-pool=github-pool
 gcloud iam workload-identity-pools delete github-pool --location=global

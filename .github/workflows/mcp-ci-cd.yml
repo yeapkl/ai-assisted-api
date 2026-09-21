@@ -1,0 +1,194 @@
+name: MCP Server CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mcp-server/**"
+      - ".github/workflows/mcp-ci-cd.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "mcp-server/**"
+      - ".github/workflows/mcp-ci-cd.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: |
+            pom.xml
+            mcp-server/pom.xml
+
+      # mcp-server's own QA integration suite (QaMcpResourceServerIntegrationTest,
+      # QaMcpAudienceMismatchRejectsRealTokenTest, McpMalformedRequestErrorSanitizationTest -
+      # see docs/qa/mcp-server-report.md) deliberately runs against a REAL,
+      # separately running hello-world-api instance rather than a mock, per this
+      # repo's testing philosophy. That instance has to actually exist here for
+      # `mvn verify` to pass - hello-world-api's own CI (ci-cd.yml) already
+      # verifies hello-world-api in isolation, so this just builds and boots it
+      # as mcp-server's test dependency.
+      - name: Build hello-world-api (test dependency for mcp-server's live integration suite)
+        run: mvn -B package -DskipTests
+
+      - name: Start hello-world-api in the background
+        env:
+          JWT_SECRET_KEY: ci-ephemeral-jwt-secret-key-at-least-32-characters-long
+          OAUTH_SIGNING_KEY_SECRET: ci-ephemeral-oauth-signing-key-secret-at-least-32-chars
+          MCP_OAUTH_CLIENT_SECRET: ci-ephemeral-mcp-oauth-client-secret-at-least-32-chars
+          OAUTH_ISSUER: http://localhost:18000
+          OAUTH_ACCESS_TOKEN_EXPIRE_MINUTES: "1"
+          PORT: "18000"
+        run: |
+          nohup java -jar target/hello-world-api.jar > /tmp/hello-world-api.log 2>&1 &
+          echo $! > /tmp/hello-world-api.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:18000/health > /dev/null; then
+              echo "hello-world-api is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "hello-world-api did not become healthy in time"
+          cat /tmp/hello-world-api.log
+          exit 1
+
+      - name: Build and run tests
+        working-directory: mcp-server
+        run: |
+          mvn -B verify \
+            -Dqa.hello-api.base-url=http://localhost:18000 \
+            -Dqa.mcp-oauth-client-secret=ci-ephemeral-mcp-oauth-client-secret-at-least-32-chars
+
+      - name: Stop hello-world-api
+        if: always()
+        run: |
+          if [ -f /tmp/hello-world-api.pid ]; then
+            kill "$(cat /tmp/hello-world-api.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload hello-world-api log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hello-world-api-log
+          path: /tmp/hello-world-api.log
+          retention-days: 7
+
+  docker-publish:
+    name: Build & push Docker image
+    needs: build-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}-mcp-server
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: mcp-server
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-cloud-run:
+    name: Deploy to Cloud Run (test environment)
+    needs: docker-publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for Workload Identity Federation
+    environment:
+      name: gcp-test
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      # Reuses the same WIF trust + deployer identity set up for the main
+      # API's deploy job (docs/deploy/gcp-cloud-run-setup.md) - roles/run.admin
+      # is project-scoped, so no additional GCP setup is needed for this
+      # second service.
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          region: us-central1
+          service: hello-world-mcp-server
+          image: ghcr.io/${{ github.repository }}-mcp-server:sha-${{ github.sha }}
+          env_vars: |-
+            API_BASE_URL=https://hello-world-api-mz5e3hbozq-uc.a.run.app
+            OAUTH_ISSUER_URI=https://hello-world-api-mz5e3hbozq-uc.a.run.app
+            MCP_RESOURCE_AUDIENCE=mcp-server
+            MCP_SERVER_BASE_URL=${{ steps.deploy.outputs.url }}
+          # No secrets: this service holds no credentials of its own - it
+          # validates OAuth access tokens issued by hello-world-api's
+          # Authorization Server, but never issues or stores one itself.
+          # --allow-unauthenticated: per the confirmed product decision
+          # (docs/requirements/mcp-server.md §5, Assumption 3), the OAuth
+          # 2.1 resource-server check (see com.apitest.mcp.security) is now
+          # the sole authorization boundary at the application layer -
+          # check_api_health/register_user need no token at all, and
+          # get_hello_greeting independently validates a real,
+          # audience-scoped Bearer token per request. Keeping the GCP IAM
+          # gate on top would make this service unreachable by any standard
+          # MCP client, which don't know how to mint a GCP identity token.
+          flags: --port=8080 --service-account=${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }} --allow-unauthenticated
+
+      - name: Smoke test the deployment (unauthenticated)
+        run: |
+          # check_api_health needs no Authorization header at all (NFR-7) -
+          # no GCP identity token to mint now that this service is
+          # --allow-unauthenticated; the OAuth resource-server check (not
+          # GCP IAM) is what protects get_hello_greeting instead.
+          curl -sf -X POST "${{ steps.deploy.outputs.url }}/mcp" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+            | tee /dev/stderr | grep -q '"register_user"'
+          curl -sf "${{ steps.deploy.outputs.url }}/.well-known/oauth-protected-resource" \
+            | tee /dev/stderr | grep -q '"authorization_servers"'

@@ -119,8 +119,17 @@ jobs:
           image: ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
           env_vars: |-
             APP_ENV=production
+            # OAuth 2.1 Authorization Server addition (NFR-13..NFR-20): the
+            # issuer must equal this service's own externally-reachable URL.
+            # TODO(deploy owner): confirm/update this if the Cloud Run URL
+            # ever changes, and set MCP_OAUTH_REDIRECT_URIS to whatever
+            # redirect URI(s) the real deployed mcp-server-facing OAuth
+            # client(s) need (default below is the local-dev placeholder).
+            OAUTH_ISSUER=https://hello-world-api-mz5e3hbozq-uc.a.run.app
           secrets: |-
             JWT_SECRET_KEY=jwt-secret-key:latest
+            OAUTH_SIGNING_KEY_SECRET=oauth-signing-key-secret:latest
+            MCP_OAUTH_CLIENT_SECRET=mcp-oauth-client-secret:latest
           # deploy-cloudrun has no dedicated input for the service's own
           # runtime identity (distinct from the deployer identity used to
           # authenticate above), so it's passed as a raw gcloud flag. Runs
