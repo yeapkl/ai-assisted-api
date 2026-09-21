@@ -29,11 +29,64 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
-          cache-dependency-path: mcp-server/pom.xml
+          cache-dependency-path: |
+            pom.xml
+            mcp-server/pom.xml
+
+      # mcp-server's own QA integration suite (QaMcpResourceServerIntegrationTest,
+      # QaMcpAudienceMismatchRejectsRealTokenTest, McpMalformedRequestErrorSanitizationTest -
+      # see docs/qa/mcp-server-report.md) deliberately runs against a REAL,
+      # separately running hello-world-api instance rather than a mock, per this
+      # repo's testing philosophy. That instance has to actually exist here for
+      # `mvn verify` to pass - hello-world-api's own CI (ci-cd.yml) already
+      # verifies hello-world-api in isolation, so this just builds and boots it
+      # as mcp-server's test dependency.
+      - name: Build hello-world-api (test dependency for mcp-server's live integration suite)
+        run: mvn -B package -DskipTests
+
+      - name: Start hello-world-api in the background
+        env:
+          JWT_SECRET_KEY: ci-ephemeral-jwt-secret-key-at-least-32-characters-long
+          OAUTH_SIGNING_KEY_SECRET: ci-ephemeral-oauth-signing-key-secret-at-least-32-chars
+          MCP_OAUTH_CLIENT_SECRET: ci-ephemeral-mcp-oauth-client-secret-at-least-32-chars
+          OAUTH_ISSUER: http://localhost:18000
+          OAUTH_ACCESS_TOKEN_EXPIRE_MINUTES: "1"
+          PORT: "18000"
+        run: |
+          nohup java -jar target/hello-world-api.jar > /tmp/hello-world-api.log 2>&1 &
+          echo $! > /tmp/hello-world-api.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:18000/health > /dev/null; then
+              echo "hello-world-api is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "hello-world-api did not become healthy in time"
+          cat /tmp/hello-world-api.log
+          exit 1
 
       - name: Build and run tests
         working-directory: mcp-server
-        run: mvn -B verify
+        run: |
+          mvn -B verify \
+            -Dqa.hello-api.base-url=http://localhost:18000 \
+            -Dqa.mcp-oauth-client-secret=ci-ephemeral-mcp-oauth-client-secret-at-least-32-chars
+
+      - name: Stop hello-world-api
+        if: always()
+        run: |
+          if [ -f /tmp/hello-world-api.pid ]; then
+            kill "$(cat /tmp/hello-world-api.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload hello-world-api log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hello-world-api-log
+          path: /tmp/hello-world-api.log
+          retention-days: 7
 
   docker-publish:
     name: Build & push Docker image
