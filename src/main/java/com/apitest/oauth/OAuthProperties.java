@@ -43,7 +43,16 @@ public class OAuthProperties {
      */
     private String clientSecret = "";
 
-    /** Comma-separated list of redirect URIs registered for that one client. */
+    /**
+     * Pipe-separated ({@code |}) list of redirect URIs registered for that
+     * one client - deliberately NOT comma-separated: Cloud Run deploy
+     * tooling (google-github-actions/deploy-cloudrun) joins every env var's
+     * KEY=VALUE pair with a comma into a single {@code gcloud
+     * --update-env-vars} argument, so a literal comma inside a value gets
+     * misparsed as a pair boundary, silently truncating this list to just
+     * its first entry (confirmed live: a second registered MCP client's
+     * callback URL was dropped this way before switching delimiters).
+     */
     private String redirectUris = "http://127.0.0.1:8765/callback";
 
     /**
@@ -151,7 +160,7 @@ public class OAuthProperties {
     }
 
     public List<String> redirectUriList() {
-        return Arrays.stream(redirectUris.split(","))
+        return Arrays.stream(redirectUris.split("\\|"))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .collect(Collectors.toList());
