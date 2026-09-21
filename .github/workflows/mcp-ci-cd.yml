@@ -164,7 +164,14 @@ jobs:
             API_BASE_URL=https://hello-world-api-mz5e3hbozq-uc.a.run.app
             OAUTH_ISSUER_URI=https://hello-world-api-mz5e3hbozq-uc.a.run.app
             MCP_RESOURCE_AUDIENCE=mcp-server
-            MCP_SERVER_BASE_URL=${{ steps.deploy.outputs.url }}
+            # TODO(deploy owner): confirm/update this if the Cloud Run URL
+            # ever changes. NOT `${{ steps.deploy.outputs.url }}` - that's
+            # this same step's own not-yet-produced output, which resolves
+            # to empty at input-evaluation time (GitHub Actions evaluates a
+            # step's `with:` before the step runs) and silently produced an
+            # empty `resource` field in RFC 9728 protected-resource metadata,
+            # breaking discovery for OAuth clients that validate it strictly.
+            MCP_SERVER_BASE_URL=https://hello-world-mcp-server-mz5e3hbozq-uc.a.run.app
           # No secrets: this service holds no credentials of its own - it
           # validates OAuth access tokens issued by hello-world-api's
           # Authorization Server, but never issues or stores one itself.
