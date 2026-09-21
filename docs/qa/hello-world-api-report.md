@@ -17,6 +17,16 @@
 > record of what was found** — do not read the "FAIL" verdict text below as
 > the current state of the build; see the Re-verification section and the
 > "Current verdict" line for that.
+>
+> **This document has been updated a third time (2026-09-21)** with a new,
+> clearly dated section — "OAuth 2.1 Authorization Server addition — QA
+> verification (2026-09-21)", inserted right after this top section — covering the additive
+> OAuth 2.1 Authorization Server revision (NFR-12..NFR-20) on top of this
+> already-reviewed FR-1..FR-7/NFR-1..NFR-11 baseline. Everything below that
+> new section (round 1, round 2, and the superseded Python-build report) is
+> preserved verbatim as historical record and is **not** re-litigated by
+> this update; the OAuth section is strictly additive, per this repo's
+> established convention for this document.
 
 ## Current verdict (after round 2): **PASS**
 
@@ -25,6 +35,204 @@ independently confirmed fixed by re-running the full test suite plus live
 manual exploit re-attempts against the packaged jar. See "Re-verification
 (round 2)" for full detail, exact commands, and the additional edge-case
 tests added this round. No regressions were found in the rest of the suite.
+
+---
+
+## OAuth 2.1 Authorization Server addition — QA verification (2026-09-21): **PASS WITH NOTES**
+
+This section covers the **additive** OAuth 2.1 Authorization Server
+revision (`docs/requirements/hello-world-api.md` NFR-12..NFR-20 — new
+`GET /.well-known/oauth-authorization-server`, `GET`/`POST /oauth2/authorize`,
+`POST /oauth2/token`, and the `com.apitest.oauth.**` package) on top of the
+already-reviewed FR-1..FR-7/NFR-1..NFR-11 baseline above, which this
+revision does **not** change (NFR-12) — confirmed below. Verdict is **PASS
+WITH NOTES** rather than plain PASS because two real findings were
+confirmed during this pass; neither is a failing/reproducible test in
+`hello-world-api` itself (both are documented, intentional-or-flagged
+behaviors, verified empirically rather than taken on faith), but both are
+worth the team's explicit sign-off — see "Findings" below.
+
+### Exact commands used to reproduce this section's results
+
+```bash
+cd /home/user/apitest
+cp .env.example .env
+sed -i "s/^JWT_SECRET_KEY=.*/JWT_SECRET_KEY=$(openssl rand -hex 32)/" .env
+sed -i "s/^OAUTH_SIGNING_KEY_SECRET=.*/OAUTH_SIGNING_KEY_SECRET=$(openssl rand -hex 32)/" .env
+sed -i "s/^MCP_OAUTH_CLIENT_SECRET=.*/MCP_OAUTH_CLIENT_SECRET=$(openssl rand -hex 32)/" .env
+mvn -o test
+```
+
+**Result:** `Tests run: 130, Failures: 0, Errors: 0, Skipped: 0` — `BUILD
+SUCCESS`. Per-class breakdown:
+
+```
+QaProductionHeadersTest                    : 1   passed
+QaVerificationTest                         : 82  passed
+QaTrustedProxyRateLimitTest                : 3   passed
+QaOAuthAuthorizationServerTest             : 14  passed  (new this pass)
+QaOAuthPublicClientRefreshTokenTest        : 1   passed  (new this pass)
+QaOAuthCrossAudienceHelloEndpointTest      : 1   passed  (new this pass)
+QaTokenExpiryTest                          : 1   passed
+ApiIntegrationTest                         : 17  passed  (developer's own suite, unmodified)
+QaSecretFailFastTest                       : 6   passed
+OAuthAuthorizationServerSmokeTest          : 4   passed  (developer's own OAuth smoke suite, unmodified)
+```
+
+130 = the pre-existing 114 (110 from round 2 + the developer's 4-test
+`OAuthAuthorizationServerSmokeTest`), unmodified, plus **16 new independent
+QA tests** added this pass.
+
+**NFR-12 regression check (full suite unmodified):** `git diff 16730f2 HEAD
+--stat -- src/test/java/` (`16730f2` = the commit immediately before the
+OAuth implementation commit `52609e8`) shows **exactly one file changed**
+under `src/test/java/`: `OAuthAuthorizationServerSmokeTest.java` added (293
+lines), **zero modifications to any pre-existing test file**. Combined with
+the 130/130 pass result above (which includes every pre-existing test,
+byte-for-byte unmodified), this directly confirms NFR-12: the OAuth
+addition changed no existing endpoint's request/response shape, status
+codes, or behavior.
+
+**Framework used:** JUnit 5 + `spring-boot-starter-test` (`@SpringBootTest`,
+`RANDOM_PORT`) with `java.net.http.HttpClient` — same framework already in
+use throughout this repository; no new framework introduced.
+
+### Requirement → test → result
+
+| Req | Description | Test(s) | Result |
+|---|---|---|---|
+| NFR-12 | OAuth addition changes nothing about the existing JSON API's behavior | Full 130-test suite pass + `git diff` confirming zero pre-existing test files modified (see above) | PASS |
+| NFR-13 | `GET /.well-known/oauth-authorization-server` — unauthenticated 200, RFC 8414 shape (`issuer`, `authorization_endpoint`, `token_endpoint`, `response_types_supported` incl. `code`, `grant_types_supported` incl. `authorization_code`+`refresh_token`, `code_challenge_methods_supported` incl. `S256`) | `nfr13_metadata_unauthenticated200WithAllRequiredFields` (also asserts `plain` is **not** advertised) | PASS |
+| NFR-14 | `GET /oauth2/authorize` renders/leads to an HTML login form when unauthenticated; valid credentials → `302` redirect with `code`+`state`; invalid credentials → re-render with generic error, no redirect | `nfr14_authorize_unauthenticated_endsUpAtHtmlLoginForm`, `nfr14_login_unknownUsername_genericErrorNoRedirect_noEnumeration`, `nfr14_login_wrongPassword_sameGenericErrorAsUnknownUser` (asserts byte-identical generic error text for unknown-user vs. wrong-password, extending NFR-4's intent) | PASS |
+| NFR-15 | `POST /oauth2/token` (`authorization_code`+PKCE) happy path returns `access_token`/`token_type=Bearer`/`expires_in`/`refresh_token`; invalid/mismatched/missing inputs return `400` with an OAuth-standard error body, never `500` | `nfr15_fullRoundTrip_issuesAccessAndRefreshTokenWithAudClaim`, `nfr15_tokenEndpoint_completelyInvalidCode_returns400InvalidGrantNot500`, `nfr15_tokenEndpoint_mismatchedRedirectUri_returns400InvalidGrant`, `nfr15nfr18_tokenEndpoint_missingCodeVerifier_returns400NotHttp500` | PASS |
+| NFR-16 | `POST /oauth2/token` (`refresh_token` grant) issues a new access token | `nfr16_refreshTokenGrant_issuesNewAccessToken` | PASS |
+| NFR-17 | OAuth login form authenticates against the same `UserStore`/password hash as `/api/v1/auth/login` — a user registered via the existing JSON endpoint can log in via the new form with the same password | `nfr17_userRegisteredViaJsonEndpoint_canLoginViaOAuthFormWithSameCredentials` (full register → `/oauth2/authorize` → `/login` → code → token round trip) | PASS |
+| NFR-18 | PKCE `S256`-only: `plain` rejected; wrong `code_verifier` rejected (`400 invalid_grant`); authorization code is single-use (replay rejected) | `nfr18_authorize_codeChallengeMethodPlain_rejectedBeforeCodeIssued`, `nfr18_authorize_codeChallengeMethodPlainCaseInsensitive_alsoRejected`, `nfr18_tokenEndpoint_wrongCodeVerifier_returns400InvalidGrant`, `nfr18_authorizationCode_singleUse_replayIsRejected` | PASS |
+| NFR-19 | Issued access tokens carry an `aud` claim identifying the resource server | `nfr15_fullRoundTrip_...` (decodes the real JWT payload and asserts `aud` contains `mcp-server`) | PASS |
+| NFR-20 | Authorization Server implemented via Spring Authorization Server, not hand-rolled | Inspection: `pom.xml` has `spring-boot-starter-oauth2-authorization-server` (resolves to `spring-security-oauth2-authorization-server:1.3.2` under the pinned Boot 3.3.4 parent); `grep` for `MessageDigest`/`Mac.`/`Cipher.`/`SecretKeyFactory` under `src/main/java/com/apitest/oauth/` found nothing — `RejectPlainPkceFilter` is an input-validation guard on the `code_challenge_method` string only, not a PKCE verifier (the actual S256 challenge/verifier comparison is library code, exercised indirectly by NFR-18's tests above) | PASS (by inspection, consistent with this report's existing NFR-11 inspection convention) |
+
+### Explicitly requested integration/edge-case coverage
+
+- **Full `authorization_code`+PKCE+token round trip, both real HTTP, not
+  mocked:** `nfr15_fullRoundTrip_issuesAccessAndRefreshTokenWithAudClaim`
+  and `nfr17_userRegisteredViaJsonEndpoint_...` both drive the complete
+  real flow (register → `GET /oauth2/authorize` → `GET /login` for a CSRF
+  token → `POST /login` with real credentials → follow the `302` redirect
+  chain → extract the real authorization `code` → `POST /oauth2/token`)
+  against a real embedded Spring context, independently written (not
+  reusing the developer's `OAuthAuthorizationServerSmokeTest`).
+- **PKCE mandatory:** `plain` rejected (2 tests, including case-insensitivity),
+  wrong verifier rejected, code single-use/replay rejected — all above.
+- **UserStore bridge + wrong-password generic error, no redirect:**
+  `nfr17_...` (bridge) + `nfr14_login_wrongPassword_sameGenericErrorAsUnknownUser`
+  (byte-identical generic error text for unknown-user vs. wrong-password,
+  `200` not `302`, no redirect `Location` header at all).
+- **Regression: full pre-existing suite unmodified and still passing** —
+  see "NFR-12 regression check" above (`git diff` + 130/130 pass).
+
+### Findings (flagged for developer sign-off/fix — not failing/reproducible bugs in `hello-world-api`'s own behavior, but real, confirmed observations)
+
+#### Finding 1 — `JwtAuthFilter` accepts a validly-signed OAuth access token on `GET /api/v1/hello` regardless of its `aud` claim (confirms the developer's own flagged gap)
+
+**Where:** `src/main/java/com/apitest/filter/JwtAuthFilter.java`,
+`resolveUsernameFromOAuthToken()` — decodes/verifies the OAuth token's
+signature/issuer/expiry via `oauthJwtDecoder`, but never inspects
+`jwt.getAudience()`.
+
+**Test:** `QaOAuthCrossAudienceHelloEndpointTest.oauthTokenAudiencedForAnotherResourceServer_calledAgainstOwnHelloEndpoint_documentActualBehavior`
+— boots a dedicated context with `app.oauth.resource-audience=some-completely-different-resource-server`
+(simulating a token minted for an unrelated resource server that happens to
+trust the same Authorization Server), performs a full real register →
+authorize → login → token round trip, confirms the resulting token's `aud`
+claim really is `["some-completely-different-resource-server"]` (not
+`mcp-server`), then calls this same instance's own `GET /api/v1/hello`
+with it.
+
+```bash
+mvn -o test -Dtest=QaOAuthCrossAudienceHelloEndpointTest
+```
+
+**Expected (per the developer's own handoff note, which asked QA to check this exact scenario):** either the endpoint rejects the token (if `hello-world-api`'s own endpoints are meant to be audience-aware too), or the team explicitly signs off that this endpoint intentionally accepts any validly-signed token from its own issuer regardless of audience.
+
+**Actual:** `GET /api/v1/hello` returned `200 {"message":"Hello, crossauduser!","server_time_utc":"..."}` — the token was accepted despite being audienced for a completely different, unrelated resource server.
+
+**Why this matters even though no FR/NFR in `hello-world-api.md` explicitly requires an audience check on this endpoint:** `docs/requirements/mcp-server.md` NFR-4 requires `mcp-server` to reject exactly this class of token — the asymmetry means a token minted for some *other*, unrelated OAuth resource server that also trusts this same Authorization Server (a scenario the multi-client/multi-resource-server model this Authorization Server is built for explicitly anticipates, per RFC 8707) could still be replayed against `hello-world-api`'s own protected endpoint, even though it would correctly be rejected by `mcp-server`. This is not exploitable *today* (only one client/resource server, `mcp-server`, is currently registered), but it is a latent gap that would become a real cross-service token-replay vector the moment a second OAuth resource server is onboarded against this same Authorization Server — which §4 of the requirements doc explicitly anticipates as a near-term possibility (DCR is deferred, not ruled out).
+
+**Fix guidance (not applied by QA):** In `JwtAuthFilter.resolveUsernameFromOAuthToken()`, after a successful `oauthJwtDecoder.decode(token)`, check `jwt.getAudience().contains(<hello-world-api's own resource identifier>)` (a new, `hello-world-api`-side audience value — e.g. reuse `app.oauth.resource-audience` if `hello-world-api` is meant to be its own resource server too, or introduce a distinct one) before accepting the token, mirroring `mcp-server`'s `AudienceValidator` pattern (`mcp-server/src/main/java/com/apitest/mcp/security/AudienceValidator.java`). Flagging for explicit team sign-off rather than filing as a hard-blocking bug, since the developer already surfaced this exact gap in the handoff and asked QA to characterize it rather than assuming an answer either way — this write-up is that characterization.
+
+#### Finding 2 (empirically confirmed, not a defect) — the `mcp-server` OAuth client is confidential, and this pass independently verified why
+
+**Test:** `QaOAuthPublicClientRefreshTokenTest.publicClientAuthorizationCodeGrant_verifyWhetherRefreshTokenIsActuallyIssued`
+— overrides the app's `RegisteredClientRepository` bean (test-scope only,
+via `@Primary` in a `@TestConfiguration`; no production code touched) to
+register the **same** client as a genuinely public client
+(`ClientAuthenticationMethod.NONE`, no secret, PKCE still mandatory), then
+drives a full `authorization_code`+PKCE round trip with **no** client
+authentication at all (no `client_secret`, no Basic auth header) — exactly
+what a real public client sends.
+
+```bash
+mvn -o test -Dtest=QaOAuthPublicClientRefreshTokenTest
+```
+
+**Observed:** The public client's `authorization_code`+PKCE grant
+**succeeded** (`200`, a real `access_token` was issued), but **no
+`refresh_token` was present in the response body** — confirmed by
+inspecting the raw JSON response.
+
+**Conclusion:** This independently confirms the developer's stated reason
+(`AuthorizationServerConfig.registeredClientRepository`'s Javadoc) for
+registering `mcp-server` as a confidential client rather than a fully
+public one: Spring Authorization Server 1.3.2 genuinely does not issue a
+refresh token for the `authorization_code` grant to a
+`ClientAuthenticationMethod.NONE` client, at least under this project's
+configuration. This is **not scored as a bug** — the deviation from the
+OAuth 2.1 public-client-with-PKCE profile is real (as the developer
+themselves flagged), but it is empirically justified rather than merely
+asserted, and PKCE remains mandatory either way (NFR-18 unaffected). Recorded
+here for the team's awareness/sign-off since it is a real, documented
+architectural deviation, not because it's wrong.
+
+### Notes / judgment calls (this section)
+
+- **Rate-limit test isolation:** `QaOAuthAuthorizationServerTest` opts into
+  `app.rate-limit.trust-x-forwarded-for=true` (mirroring the existing
+  `QaTrustedProxyRateLimitTest` technique) purely so its ~8 independent
+  `registerUser` calls each get a distinct rate-limit bucket via a unique
+  synthetic `X-Forwarded-For` value, rather than tripping NFR-5's real
+  5/60s register limit against each other. This is a test-isolation
+  technique only (NFR-5 itself remains covered by the existing suite,
+  unaffected by this addition) — not a finding about the OAuth endpoints,
+  which are not rate-limited by `RateLimitFilter` at all (it only matches
+  `/api/v1/auth/*`, not `/oauth2/*` or `/login`) — itself worth noting as a
+  gap below.
+- **`/oauth2/authorize`, `/oauth2/token`, and `/login` have no rate
+  limiting of their own**, unlike `/api/v1/auth/*` (NFR-5). Not required by
+  any NFR-12..NFR-20 item, and out of this pass's scope to fail on, but
+  flagged as a gap since the login form is a credential-guessing surface
+  functionally equivalent to `/api/v1/auth/login`.
+
+### Gaps: OAuth requirements with no (or only partial) automated coverage
+
+- **Rate limiting on the OAuth login form / token endpoint** — see Notes
+  above; not required by NFR-12..NFR-20, but a real difference in
+  brute-force exposure between the JSON login path and the OAuth login
+  path worth a product/security decision.
+- **NFR-20's "no custom OAuth metadata endpoint hand-written from scratch"**
+  was verified by inspection only (the metadata endpoint is entirely
+  Spring Authorization Server's own `OAuth2AuthorizationServerConfiguration`
+  wiring — no custom `@RestController` for it exists in `com.apitest.oauth`)
+  — consistent with this report's existing NFR-11 inspection-only
+  convention, not a new gap introduced by this pass.
+
+### Test files added this pass (all written independently by QA)
+
+- `/home/user/apitest/src/test/java/com/apitest/QaOAuthAuthorizationServerTest.java` — 14 tests, main NFR-13..NFR-19 flows + PKCE/negative edge cases.
+- `/home/user/apitest/src/test/java/com/apitest/QaOAuthCrossAudienceHelloEndpointTest.java` — 1 test, Finding 1 above.
+- `/home/user/apitest/src/test/java/com/apitest/QaOAuthPublicClientRefreshTokenTest.java` — 1 test, Finding 2 above.
+
+**Total this pass: 16 new tests**, all passing; **130 tests overall** in
+`hello-world-api` as of this report (see full-suite result above).
 
 ---
 
