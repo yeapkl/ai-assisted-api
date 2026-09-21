@@ -1,0 +1,13 @@
+# Test-classpath-only defaults, merged on top of src/main/resources/application.yml
+# for every test in this module. Added solely so the pre-existing FR-1..FR-7/
+# NFR-1..NFR-10 test suite (which sets app.jwt-secret-key itself per-test but
+# knows nothing about the new OAuth Authorization Server addition) can boot
+# the full Spring context unmodified after that addition - see
+# com.apitest.oauth.OAuthProperties, which fails fast at startup if this is
+# missing/short, exactly like app.jwt-secret-key does. Individual OAuth-focused
+# tests are free to override this per-test the same way existing tests already
+# override app.jwt-secret-key.
+app:
+  oauth:
+    signing-key-secret: test-oauth-signing-key-secret-do-not-use-in-prod-32c
+    client-secret: test-oauth-client-secret-do-not-use-in-prod-32chars

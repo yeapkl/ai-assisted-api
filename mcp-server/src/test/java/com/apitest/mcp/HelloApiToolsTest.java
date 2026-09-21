@@ -1,13 +1,18 @@
 package com.apitest.mcp;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
+import java.time.Instant;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -34,6 +39,11 @@ class HelloApiToolsTest {
         RestClient.Builder builder = RestClient.builder().baseUrl("http://upstream.test");
         mockServer = MockRestServiceServer.bindTo(builder).build();
         tools = new HelloApiTools(builder.build());
+    }
+
+    @AfterEach
+    void tearDown() {
+        SecurityContextHolder.clearContext();
     }
 
     @Test
@@ -74,60 +84,14 @@ class HelloApiToolsTest {
         assertEquals("Registration failed", result.get("error"));
     }
 
-    @Test
-    void login_returnsTokens() {
-        mockServer.expect(requestTo("http://upstream.test/api/v1/auth/login"))
-                .andExpect(method(HttpMethod.POST))
-                .andRespond(withSuccess(
-                        "{\"access_token\":\"abc\",\"refresh_token\":\"def\",\"token_type\":\"bearer\"}",
-                        MediaType.APPLICATION_JSON));
-
-        Map<String, Object> result = tools.login("alice", "S3cur3Passw0rd!");
-
-        assertEquals("abc", result.get("access_token"));
-        assertEquals("def", result.get("refresh_token"));
-    }
+    // login and refresh_access_token tools are removed (FR-4/FR-6) - OAuth 2.1
+    // authorization_code+PKCE and refresh_token grants against
+    // hello-world-api's /oauth2/authorize and /oauth2/token now handle this,
+    // outside any MCP tool call.
 
     @Test
-    void login_wrongPassword_returns401WithGenericError() {
-        mockServer.expect(requestTo("http://upstream.test/api/v1/auth/login"))
-                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body("{\"error\":\"Invalid credentials\"}"));
-
-        Map<String, Object> result = tools.login("alice", "wrong");
-
-        assertEquals(401, result.get("http_status"));
-        assertEquals("Invalid credentials", result.get("error"));
-    }
-
-    @Test
-    void refreshAccessToken_sendsRefreshTokenAndReturnsNewAccessToken() {
-        mockServer.expect(requestTo("http://upstream.test/api/v1/auth/refresh"))
-                .andExpect(content().json("{\"refresh_token\":\"def\"}"))
-                .andRespond(withSuccess(
-                        "{\"access_token\":\"newtoken\",\"token_type\":\"bearer\"}", MediaType.APPLICATION_JSON));
-
-        Map<String, Object> result = tools.refreshAccessToken("def");
-
-        assertEquals("newtoken", result.get("access_token"));
-    }
-
-    @Test
-    void refreshAccessToken_accessTokenUsedAsRefresh_returns401() {
-        mockServer.expect(requestTo("http://upstream.test/api/v1/auth/refresh"))
-                .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body("{\"error\":\"Invalid refresh token\"}"));
-
-        Map<String, Object> result = tools.refreshAccessToken("abc");
-
-        assertEquals(401, result.get("http_status"));
-        assertEquals("Invalid refresh token", result.get("error"));
-    }
-
-    @Test
-    void getHelloGreeting_sendsBearerHeaderAndReturnsGreeting() {
+    void getHelloGreeting_usesAuthenticatedJwtAsBearerHeaderAndReturnsGreeting() {
+        setAuthenticatedJwt("abc");
         mockServer.expect(requestTo("http://upstream.test/api/v1/hello"))
                 .andExpect(method(HttpMethod.GET))
                 .andExpect(header("Authorization", "Bearer abc"))
@@ -135,21 +99,46 @@ class HelloApiToolsTest {
                         "{\"message\":\"Hello, alice!\",\"server_time_utc\":\"2026-09-20T00:00:00Z\"}",
                         MediaType.APPLICATION_JSON));
 
-        Map<String, Object> result = tools.getHelloGreeting("abc");
+        Map<String, Object> result = tools.getHelloGreeting();
 
         assertEquals("Hello, alice!", result.get("message"));
     }
 
     @Test
-    void getHelloGreeting_tamperedToken_returns401() {
+    void getHelloGreeting_upstreamRejectsToken_returns401() {
+        setAuthenticatedJwt("tampered");
         mockServer.expect(requestTo("http://upstream.test/api/v1/hello"))
                 .andRespond(withStatus(HttpStatus.UNAUTHORIZED)
                         .contentType(MediaType.APPLICATION_JSON)
                         .body("{\"error\":\"Could not validate credentials\"}"));
 
-        Map<String, Object> result = tools.getHelloGreeting("tampered");
+        Map<String, Object> result = tools.getHelloGreeting();
 
         assertEquals(401, result.get("http_status"));
         assertEquals("Could not validate credentials", result.get("error"));
+    }
+
+    @Test
+    void getHelloGreeting_noAuthenticatedPrincipal_returns401WithoutCallingUpstream() {
+        // FR-5/NFR-5: no LLM-visible token argument exists on this tool at
+        // all; if somehow invoked with no authenticated SecurityContext (the
+        // resource-server filter chain normally prevents this - see
+        // com.apitest.mcp.security.McpToolAuthorizationFilter), it must fail
+        // closed rather than calling the upstream API with no credentials.
+        Map<String, Object> result = tools.getHelloGreeting();
+
+        assertEquals(401, result.get("http_status"));
+        mockServer.verify();
+    }
+
+    private static void setAuthenticatedJwt(String tokenValue) {
+        Jwt jwt = Jwt.withTokenValue(tokenValue)
+                .header("alg", "RS256")
+                .claim("sub", "alice")
+                .claim("aud", "mcp-server")
+                .issuedAt(Instant.now())
+                .expiresAt(Instant.now().plusSeconds(60))
+                .build();
+        SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt));
     }
 }

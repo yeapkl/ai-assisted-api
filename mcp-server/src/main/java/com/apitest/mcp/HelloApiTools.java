@@ -3,6 +3,9 @@ package com.apitest.mcp;
 import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
@@ -52,38 +55,45 @@ public class HelloApiTools {
                 .body(JSON_MAP));
     }
 
-    @McpTool(name = "login", description = "Logs in with a username and password, returning a JWT access "
-            + "token (short-lived) and refresh token (long-lived).")
-    public Map<String, Object> login(
-            @McpToolParam(description = "Username", required = true) String username,
-            @McpToolParam(description = "Password", required = true) String password) {
-        return call(() -> client.post()
-                .uri("/api/v1/auth/login")
-                .body(Map.of("username", username, "password", password))
-                .retrieve()
-                .body(JSON_MAP));
-    }
+    // login and refresh_access_token tools removed (FR-4/FR-6): authentication
+    // and token refresh now happen via the standard OAuth 2.1
+    // authorization_code+PKCE browser flow and refresh_token grant against
+    // hello-world-api's /oauth2/authorize and /oauth2/token, entirely outside
+    // the LLM's visible tool-call context - see docs/requirements/mcp-server.md.
 
-    @McpTool(name = "refresh_access_token", description = "Exchanges a valid refresh token for a new access token, "
-            + "without needing the username/password again.")
-    public Map<String, Object> refreshAccessToken(
-            @McpToolParam(description = "A refresh token previously returned by the login tool", required = true) String refreshToken) {
-        return call(() -> client.post()
-                .uri("/api/v1/auth/refresh")
-                .body(Map.of("refresh_token", refreshToken))
-                .retrieve()
-                .body(JSON_MAP));
-    }
-
-    @McpTool(name = "get_hello_greeting", description = "Calls the protected /hello endpoint using a valid access "
-            + "token, returning a greeting for the authenticated user and the server's current time.")
-    public Map<String, Object> getHelloGreeting(
-            @McpToolParam(description = "An access token previously returned by the login tool", required = true) String accessToken) {
+    @McpTool(name = "get_hello_greeting", description = "Calls the protected /hello endpoint using the caller's "
+            + "authenticated OAuth access token, returning a greeting for the authenticated user and the server's "
+            + "current time.")
+    public Map<String, Object> getHelloGreeting() {
+        // FR-5: no LLM-visible token argument - the caller's identity comes
+        // from the security context established by McpToolAuthorizationFilter
+        // (see com.apitest.mcp.security) before this method runs. Verified
+        // empirically that Spring AI's MCP tool method invocation runs on the
+        // same servlet request thread as that filter, so SecurityContextHolder
+        // (thread-local by default) reflects the token it validated.
+        String rawToken = currentAccessToken();
+        if (rawToken == null) {
+            // Defensive fallback only: McpToolAuthorizationFilter already
+            // rejects an unauthenticated call to this tool with a real HTTP
+            // 401 + WWW-Authenticate before this method body ever runs.
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("http_status", 401);
+            error.put("error", "Could not validate credentials");
+            return error;
+        }
         return call(() -> client.get()
                 .uri("/api/v1/hello")
-                .header("Authorization", "Bearer " + accessToken)
+                .header("Authorization", "Bearer " + rawToken)
                 .retrieve()
                 .body(JSON_MAP));
+    }
+
+    private static String currentAccessToken() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication instanceof JwtAuthenticationToken jwtAuthentication) {
+            return jwtAuthentication.getToken().getTokenValue();
+        }
+        return null;
     }
 
     private Map<String, Object> call(Supplier<Map<String, Object>> request) {

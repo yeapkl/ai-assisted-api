@@ -21,6 +21,15 @@ spring:
 api:
   base-url: ${API_BASE_URL:https://hello-world-api-mz5e3hbozq-uc.a.run.app}
 
+# OAuth 2.1 resource-server config (NFR-1..NFR-4 in docs/requirements/mcp-server.md).
+# issuer-uri defaults to a locally running hello-world-api for local dev;
+# resource-base-url is this server's own externally-reachable URL, used in
+# the RFC 9728 protected-resource metadata and WWW-Authenticate header.
+oauth:
+  issuer-uri: ${OAUTH_ISSUER_URI:http://localhost:8000}
+  resource-audience: ${MCP_RESOURCE_AUDIENCE:mcp-server}
+  resource-base-url: ${MCP_SERVER_BASE_URL:http://localhost:8080}
+
 logging:
   level:
     root: INFO

@@ -105,7 +105,19 @@ mvn package     # test + build target/hello-world-api.jar
 | POST | `/api/v1/auth/register` | none | Create a user (rate-limited) |
 | POST | `/api/v1/auth/login` | none | Exchange credentials for tokens (rate-limited) |
 | POST | `/api/v1/auth/refresh` | none | Exchange refresh token for new access token (rate-limited) |
-| GET | `/api/v1/hello` | Bearer access token | Returns greeting + current UTC time |
+| GET | `/api/v1/hello` | Bearer access token (either the JSON API's own jjwt token, or an OAuth access token — see below) | Returns greeting + current UTC time |
+| GET | `/.well-known/oauth-authorization-server` | none | RFC 8414 OAuth Authorization Server metadata |
+| GET | `/oauth2/authorize` | browser session (HTML login form) | OAuth 2.1 `authorization_code`+PKCE authorization endpoint |
+| POST | `/oauth2/token` | pre-registered client credentials + PKCE | OAuth 2.1 `authorization_code`/`refresh_token` token endpoint |
+
+The OAuth 2.1 Authorization Server (`/.well-known/oauth-authorization-server`,
+`/oauth2/authorize`, `/oauth2/token`, `/login`) is an additive capability so
+`mcp-server` (or any other OAuth 2.1 client) can authenticate end users via a
+standards-based browser-redirect flow instead of raw tool arguments — see
+`docs/requirements/hello-world-api.md` (NFR-13..NFR-20) and
+`com.apitest.oauth` for the implementation. It does not change
+`/api/v1/auth/*`'s or `/api/v1/hello`'s existing request/response shapes,
+status codes, or the original JSON-only auth flow in any way.
 
 ## Project layout
 
@@ -117,13 +129,20 @@ src/main/java/com/apitest/
   security/JwtService.java     — JWT issuance/verification (io.jsonwebtoken:jjwt)
   security/PasswordService.java— password hashing (Spring Security BCryptPasswordEncoder) + NFR-4 dummy hash
   store/UserStore.java         — in-memory user store
-  filter/JwtAuthFilter.java    — bearer-token auth check for /api/v1/hello
+  filter/JwtAuthFilter.java    — bearer-token auth check for /api/v1/hello (accepts either token family)
   filter/RateLimitFilter.java  — Bucket4j-based rate limiting for /api/v1/auth/*
   web/AuthController.java      — register/login/refresh
   web/HelloController.java     — protected greeting endpoint
   web/HealthController.java    — liveness check
   web/GlobalExceptionHandler.java — maps validation/malformed-body/method-not-allowed to the API's error shape
   web/dto/                     — request DTOs with Jakarta Bean Validation annotations
+  oauth/                       — OAuth 2.1 Authorization Server (NFR-13..NFR-20, additive)
+    OAuthProperties.java          — app.oauth.* config, fails fast on missing/short secrets
+    JwkConfig.java                — RSA signing key + JwtDecoder for the OAuth token family
+    AuthorizationServerConfig.java— RegisteredClientRepository, security filter chains, aud-claim customizer
+    UserStoreUserDetailsService.java — bridges the /login form to the existing UserStore (NFR-17)
+    LoginController.java / LoginFailureHandler.java — the one HTML endpoint in this API
+    RejectPlainPkceFilter.java    — NFR-18: rejects code_challenge_method=plain
 src/main/resources/application.yml — server port, app.* config bound to env vars
 src/test/java/com/apitest/
   ApiIntegrationTest.java  — sanity tests against a real running embedded server
@@ -145,7 +164,7 @@ implementation — see `docs/JAVA_PORT_NOTES.md`.
 - `docs/review/hello-world-api-review.md` — final reviewer sign-off (original Python build)
 - `docs/BEST_PRACTICES_AND_ROADMAP.md` — best practices applied + improvement plan for production
 - `docs/deploy/gcp-cloud-run-setup.md` — one-time GCP setup for keyless CI/CD deployment (WIF, service accounts, Secret Manager)
-- `docs/deploy/mcp-server-setup.md` — how to reach the MCP server's authenticated Cloud Run endpoint
+- `docs/deploy/mcp-server-setup.md` — how to reach the MCP server's Cloud Run endpoint (OAuth 2.1 resource-server auth at the application layer, `--allow-unauthenticated` at the Cloud Run/IAM layer)
 - `mcp-server/README.md` — the MCP server that wraps this API's endpoints as AI-agent-callable tools
 
 ## The agent pipeline

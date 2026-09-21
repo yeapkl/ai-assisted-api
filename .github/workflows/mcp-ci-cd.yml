@@ -109,23 +109,33 @@ jobs:
           image: ghcr.io/${{ github.repository }}-mcp-server:sha-${{ github.sha }}
           env_vars: |-
             API_BASE_URL=https://hello-world-api-mz5e3hbozq-uc.a.run.app
-          # No secrets: this service holds no credentials of its own, it
-          # only forwards whatever the MCP client passes in as tool
-          # arguments to the main API.
-          # --no-allow-unauthenticated: unlike the main API, this MCP
-          # endpoint is deliberately NOT public. Spring AI's own docs warn
-          # the HTTP MCP transport exposes an unauthenticated JSON-RPC
-          # endpoint that lets any caller list/invoke every tool, so this
-          # requires a valid GCP identity token on every request (see
-          # docs/deploy/mcp-server-setup.md for how to call it).
-          flags: --port=8080 --service-account=${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }} --no-allow-unauthenticated
+            OAUTH_ISSUER_URI=https://hello-world-api-mz5e3hbozq-uc.a.run.app
+            MCP_RESOURCE_AUDIENCE=mcp-server
+            MCP_SERVER_BASE_URL=${{ steps.deploy.outputs.url }}
+          # No secrets: this service holds no credentials of its own - it
+          # validates OAuth access tokens issued by hello-world-api's
+          # Authorization Server, but never issues or stores one itself.
+          # --allow-unauthenticated: per the confirmed product decision
+          # (docs/requirements/mcp-server.md §5, Assumption 3), the OAuth
+          # 2.1 resource-server check (see com.apitest.mcp.security) is now
+          # the sole authorization boundary at the application layer -
+          # check_api_health/register_user need no token at all, and
+          # get_hello_greeting independently validates a real,
+          # audience-scoped Bearer token per request. Keeping the GCP IAM
+          # gate on top would make this service unreachable by any standard
+          # MCP client, which don't know how to mint a GCP identity token.
+          flags: --port=8080 --service-account=${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }} --allow-unauthenticated
 
-      - name: Smoke test the deployment (authenticated)
+      - name: Smoke test the deployment (unauthenticated)
         run: |
-          TOKEN=$(gcloud auth print-identity-token --audiences="${{ steps.deploy.outputs.url }}")
+          # check_api_health needs no Authorization header at all (NFR-7) -
+          # no GCP identity token to mint now that this service is
+          # --allow-unauthenticated; the OAuth resource-server check (not
+          # GCP IAM) is what protects get_hello_greeting instead.
           curl -sf -X POST "${{ steps.deploy.outputs.url }}/mcp" \
-            -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
             -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
             | tee /dev/stderr | grep -q '"register_user"'
+          curl -sf "${{ steps.deploy.outputs.url }}/.well-known/oauth-protected-resource" \
+            | tee /dev/stderr | grep -q '"authorization_servers"'

@@ -8,77 +8,121 @@ beyond what's already documented in `gcp-cloud-run-setup.md`. It reuses:
   service account - `roles/run.admin` is project-scoped, so it can already
   deploy this second Cloud Run service.
 - The same `cloud-run-runtime` runtime identity - this server holds no
-  secrets of its own (it only forwards whatever the caller passes as tool
-  arguments to the main API), so no new Secret Manager entry is needed.
+  secrets of its own (it validates OAuth access tokens issued by
+  `hello-world-api`'s Authorization Server, but never issues, stores, or
+  forwards a raw password or long-lived credential itself), so no new
+  Secret Manager entry is needed for this module specifically.
 - The same four GitHub Actions repository variables.
 
 It's a separate deployable (`.github/workflows/mcp-ci-cd.yml`, path-filtered
 to only run on changes under `mcp-server/**`), deployed to its own Cloud Run
 service: `hello-world-mcp-server`.
 
-## This service requires authentication
+## Access model: OAuth 2.1, not GCP IAM
 
-Unlike `hello-world-api`, this is deployed **without**
-`--allow-unauthenticated` - see `mcp-server/README.md` for why. Every
-request needs a valid GCP identity token whose audience matches the
-service's URL.
+**This changed in the OAuth Authorization Server revision** (see
+`docs/requirements/mcp-server.md` §5, Assumption 3 for the full reasoning).
+PR #4's original posture deployed this service **without**
+`--allow-unauthenticated`, requiring a GCP identity token on every request,
+because at that time there was no real per-end-user authentication at the
+application layer at all (tool arguments carried raw passwords/tokens, and
+nothing verified them cryptographically). That gap is what the OAuth
+revision closes:
 
-## Calling it as a human (testing)
+- `hello-world-mcp-server` is now deployed **with**
+  `--allow-unauthenticated` - the Cloud Run/GCP-IAM gate is no longer the
+  authorization boundary.
+- Every `POST /mcp` call to the one tool that needs authentication
+  (`get_hello_greeting`) is independently authenticated per end user via a
+  Spring Security-validated, audience-scoped OAuth 2.1 Bearer access token
+  (see `mcp-server/README.md`'s "This server is an OAuth 2.1 Resource
+  Server" section) - a real, cryptographically-verified per-request check,
+  not a coarse "is this GCP account allowed to invoke the service at all"
+  gate.
+- `check_api_health` and `register_user` remain callable with no
+  `Authorization` header at all, exactly as before.
+- Standard, off-the-shelf MCP clients know how to perform the MCP/OAuth 2.1
+  browser-redirect (`authorization_code` + PKCE) flow and attach the
+  resulting Bearer token; they do not know how to additionally mint and
+  attach a GCP-specific identity token. Keeping the IAM gate would have made
+  this service unreachable by any such client, defeating the point of
+  implementing the standards-based OAuth flow.
+
+This is a legitimate architectural tradeoff (stacking both would be more
+defense-in-depth), not a clear-cut technical requirement - see that
+Assumption for the full weighing. It was confirmed by the product owner and
+recorded there rather than left as an unreviewed default.
+
+## How a human/MCP client actually authenticates now
+
+Authentication happens against **`hello-world-api`**, not against
+`mcp-server` or GCP:
+
+1. The MCP client (or a human testing by hand) directs a browser to
+   `hello-world-api`'s `GET /oauth2/authorize?response_type=code&client_id=mcp-server&redirect_uri=...&code_challenge=...&code_challenge_method=S256&state=...`
+   (PKCE is mandatory - see `docs/requirements/hello-world-api.md` NFR-18).
+2. The user logs in with their existing `hello-world-api` username/password
+   (the same credentials `POST /api/v1/auth/register`/`login` use - NFR-17)
+   via the HTML login form `hello-world-api` now serves at `/login`.
+3. `hello-world-api` redirects back to the client's `redirect_uri` with an
+   authorization `code`.
+4. The client exchanges that code (plus its PKCE `code_verifier` and the
+   pre-registered client's secret) at `hello-world-api`'s `POST
+   /oauth2/token` for an access token (audience-scoped to `mcp-server` -
+   NFR-19) and a refresh token.
+5. The client attaches `Authorization: Bearer <access_token>` on its
+   `POST /mcp` calls to `hello-world-mcp-server` when calling
+   `get_hello_greeting`. When the access token expires, the client uses the
+   standard `refresh_token` grant against the same `/oauth2/token` endpoint
+   to get a new one - no re-login, and no MCP tool call involved.
+
+`hello-world-mcp-server` never issues, stores, or forwards these
+credentials itself beyond validating the Bearer token on each request - see
+`mcp-server/README.md` for the exact `oauth.*` configuration
+(`OAUTH_ISSUER_URI`, `MCP_RESOURCE_AUDIENCE`, `MCP_SERVER_BASE_URL`) and a
+full by-hand curl walkthrough.
+
+## Calling the deployed service as a human (testing)
 
 ```bash
 SERVICE_URL=$(gcloud run services describe hello-world-mcp-server \
   --region=us-central1 --format='value(status.url)')
 
-TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
-
+# Unauthenticated tools work with no Authorization header at all:
 curl -X POST "$SERVICE_URL/mcp" \
-  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-```
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_api_health","arguments":{}}}'
 
-Identity tokens are short-lived (~1 hour) - re-run the `print-identity-token`
-command to get a fresh one when it expires.
+# get_hello_greeting needs a Bearer access token from hello-world-api's
+# Authorization Server (see the OAuth flow above / hello-world-api's README
+# for the full by-hand curl walkthrough of /oauth2/authorize + /oauth2/token):
+curl -X POST "$SERVICE_URL/mcp" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_hello_greeting","arguments":{}}}'
+```
 
 ## Connecting an MCP client (e.g. Claude Desktop/Code)
 
-Most MCP clients that support a remote HTTP server let you supply a custom
-header. Configure:
+Configure the client with:
 
 - **URL**: the Cloud Run service URL + `/mcp`
-- **Header**: `Authorization: Bearer <identity token>`
+- **OAuth**: point the client at `hello-world-api`'s
+  `/.well-known/oauth-authorization-server` (or let it discover this via
+  `hello-world-mcp-server`'s own `/.well-known/oauth-protected-resource`,
+  which names that Authorization Server - RFC 9728) so it can perform the
+  `authorization_code`+PKCE flow and standard `refresh_token` renewal itself.
 
-Since identity tokens expire hourly, this is workable for testing but not
-for a long-lived client connection. For that, either:
+Most MCP clients that support the MCP Authorization spec handle this
+automatically once pointed at the server URL - no manual token minting or
+GCP identity-token dance required, unlike the old IAM-gated posture.
 
-- Have the client re-mint the token itself before each session (if it
-  supports a token-refresh hook), or
-- Grant a specific caller's service account `roles/run.invoker` on this
-  service (`gcloud run services add-iam-policy-binding
-  hello-world-mcp-server --region=us-central1
-  --member="serviceAccount:<caller>@<project>.iam.gserviceaccount.com"
-  --role="roles/run.invoker"`) and have that caller mint its own tokens the
-  same way.
+## Rolling back to the old GCP-IAM-gated posture (not recommended)
 
-## Granting a specific person or service account access
-
-By default, only project owners/editors (and anyone with `roles/run.admin`
-or `roles/run.invoker` already) can call this service. To let a specific
-Google account or service account invoke it:
-
-```bash
-gcloud run services add-iam-policy-binding hello-world-mcp-server \
-  --region=us-central1 \
-  --member="user:someone@example.com" \
-  --role="roles/run.invoker"
-```
-
-(Use `serviceAccount:...` instead of `user:...` for a service account.)
-
-## Rolling back to public/unauthenticated (not recommended)
-
-If you deliberately want this endpoint public despite the exposure Spring
-AI's docs describe, remove `--no-allow-unauthenticated` from
-`.github/workflows/mcp-ci-cd.yml`'s `deploy-cloud-run` job and add
-`--allow-unauthenticated` instead, matching the main API's job.
+If a future reviewer decides the interoperability tradeoff isn't worth it,
+revert `.github/workflows/mcp-ci-cd.yml`'s `deploy-cloud-run` job flags back
+to `--no-allow-unauthenticated`, and revisit whether the smoke-test step
+needs to mint a GCP identity token again for the parts of the API IAM would
+now be gating a second time.
