@@ -122,10 +122,17 @@ jobs:
             # OAuth 2.1 Authorization Server addition (NFR-13..NFR-20): the
             # issuer must equal this service's own externally-reachable URL.
             # TODO(deploy owner): confirm/update this if the Cloud Run URL
-            # ever changes, and set MCP_OAUTH_REDIRECT_URIS to whatever
-            # redirect URI(s) the real deployed mcp-server-facing OAuth
-            # client(s) need (default below is the local-dev placeholder).
+            # ever changes.
             OAUTH_ISSUER=https://hello-world-api-mz5e3hbozq-uc.a.run.app
+            # Redirect URIs the registered mcp-server OAuth client trusts -
+            # comma-separated (OAuthProperties#redirectUriList). Spring
+            # Authorization Server rejects an unregistered redirect_uri
+            # directly (400, no redirect back to the client - it's an
+            # open-redirect protection), so every real MCP client's actual
+            # callback URL must be listed here, not just the by-hand-curl
+            # local-testing placeholder. Add a new client's callback URL
+            # here (comma-separated) when connecting another MCP client.
+            MCP_OAUTH_REDIRECT_URIS=http://127.0.0.1:8765/callback,https://claude.ai/api/mcp/auth_callback
           secrets: |-
             JWT_SECRET_KEY=jwt-secret-key:latest
             OAUTH_SIGNING_KEY_SECRET=oauth-signing-key-secret:latest
