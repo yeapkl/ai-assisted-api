@@ -7,7 +7,12 @@ import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.authorization.config.annotation.web.configuration.OAuth2AuthorizationServerConfiguration;
 
 import java.nio.charset.StandardCharsets;
@@ -17,6 +22,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -53,9 +59,32 @@ public class JwkConfig {
         return new ImmutableJWKSet<>(jwkSet);
     }
 
+    /**
+     * QA-flagged gap fix (2026-09-21): this decoder is consumed <b>only</b>
+     * by {@code JwtAuthFilter} as the OAuth-token verification path for this
+     * app's own {@code GET /api/v1/hello} - it is not used elsewhere by the
+     * Authorization Server itself (verified: no other class in this module
+     * injects {@code JwtDecoder}). By default
+     * {@code OAuth2AuthorizationServerConfiguration.jwtDecoder(...)} only
+     * validates signature/timestamp, not audience - exactly the gap QA
+     * found. Composing a {@code DelegatingOAuth2TokenValidator} here, mirroring
+     * mcp-server's {@code JwtDecoderConfig} pattern exactly, closes it: a
+     * validly-signed, unexpired token whose {@code aud} does not contain
+     * this app's own resource identifier ({@link OAuthProperties#getSelfAudience()})
+     * is now rejected by {@code oauthJwtDecoder.decode(token)} itself
+     * (throwing {@code JwtValidationException}, already caught by
+     * {@code JwtAuthFilter.resolveUsernameFromOAuthToken()}'s existing
+     * {@code catch (JwtException e)}) - no change to the filter itself was
+     * needed.
+     */
     @Bean
-    public JwtDecoder jwtDecoder(JWKSource<SecurityContext> jwkSource) {
-        return OAuth2AuthorizationServerConfiguration.jwtDecoder(jwkSource);
+    public JwtDecoder jwtDecoder(JWKSource<SecurityContext> jwkSource, OAuthProperties oAuthProperties) {
+        NimbusJwtDecoder jwtDecoder =
+                (NimbusJwtDecoder) OAuth2AuthorizationServerConfiguration.jwtDecoder(jwkSource);
+        OAuth2TokenValidator<Jwt> defaultValidators = JwtValidators.createDefault();
+        OAuth2TokenValidator<Jwt> audienceValidator = new AudienceValidator(oAuthProperties.getSelfAudience());
+        jwtDecoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(List.of(defaultValidators, audienceValidator)));
+        return jwtDecoder;
     }
 
     private static KeyPair generateRsaKeyPair(String signingKeySecret) {

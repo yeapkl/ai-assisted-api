@@ -103,7 +103,19 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
     }
 
-    /** The new OAuth 2.1 Authorization Server's RS256 access-token path. */
+    /**
+     * The new OAuth 2.1 Authorization Server's RS256 access-token path.
+     * <p>
+     * <b>QA-flagged gap fix (2026-09-21):</b> {@code oauthJwtDecoder}
+     * (see {@code com.apitest.oauth.JwkConfig}) now also validates the
+     * token's {@code aud} claim against this app's own resource identifier
+     * ({@code app.oauth.self-audience}, mirroring mcp-server's
+     * {@code AudienceValidator}) - a validly-signed, unexpired token
+     * audienced for some other, unrelated resource server is rejected by
+     * {@code decode()} itself (thrown as {@code JwtValidationException}, a
+     * {@link JwtException}), caught below exactly like any other decode
+     * failure. No change was needed in this method itself.
+     */
     private String resolveUsernameFromOAuthToken(String token) {
         try {
             Jwt jwt = oauthJwtDecoder.decode(token);

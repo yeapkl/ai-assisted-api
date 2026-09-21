@@ -48,10 +48,59 @@ public class OAuthProperties {
 
     /**
      * The {@code aud} (audience, RFC 8707) value stamped onto issued access
-     * tokens (NFR-19) - must match the value mcp-server's resource-server
-     * audience validator checks for.
+     * tokens (NFR-19) - must match the value mcp-server's own,
+     * independently-configured resource-server audience validator checks
+     * for. Deliberately kept a single value with its original default
+     * ({@code mcp-server}), matching how it is already documented/used
+     * end-to-end (e.g. {@code docs/qa/mcp-server-report.md}'s own exact
+     * reproduction commands set {@code MCP_OAUTH_RESOURCE_AUDIENCE=mcp-server}
+     * verbatim) - see {@link #getSelfAudience()}'s Javadoc for why
+     * hello-world-api's own audience requirement is a genuinely separate
+     * config surface rather than folded into this one as a second
+     * comma-separated value: doing that would make the realistic flow
+     * silently break for any deployment (including QA's own documented
+     * repro script) that keeps setting this to a single value, which this
+     * fix must not depend on anyone remembering to change.
      */
     private String resourceAudience = "mcp-server";
+
+    /**
+     * hello-world-api's <b>own</b> resource identifier - the specific
+     * {@code aud} value that authorizes an OAuth access token to call this
+     * app's own protected endpoint, {@code GET /api/v1/hello} (see
+     * {@code JwtAuthFilter} / {@code JwkConfig}'s OAuth {@code JwtDecoder}
+     * audience validator, mirroring mcp-server's {@code AudienceValidator}
+     * pattern exactly).
+     * <p>
+     * <b>QA-flagged gap fix (2026-09-21):</b> {@code jwtCustomizer} (see
+     * {@code AuthorizationServerConfig}) stamps <i>both</i> this value
+     * <i>and</i> {@link #resourceAudience} onto every issued access token,
+     * unconditionally, regardless of what {@link #resourceAudience} is
+     * configured as - traced the actual token flow before deciding this
+     * (see {@code HelloApiTools.getHelloGreeting()} in mcp-server): that
+     * tool forwards the exact token it received straight through to this
+     * app's own {@code GET /api/v1/hello}, so with exactly one registered
+     * client, every token this AS issues genuinely needs to satisfy both
+     * checks. Per RFC 8707, an {@code aud} claim MAY legitimately list
+     * multiple resource servers a token is valid for.
+     * <p>
+     * Deliberately unconditional (not e.g. folded into {@link #resourceAudience}
+     * as a second comma-separated value) so this fix can never regress the
+     * realistic mcp-server call-through flow due to a deployment/repro
+     * script that keeps {@link #resourceAudience} as a single value (see
+     * that field's Javadoc) - this value is always added on top, no matter
+     * what. The trade-off, accepted deliberately: a deployment that
+     * overrides only {@link #resourceAudience} to represent some other,
+     * unrelated resource server's audience (QA's own exact repro scenario)
+     * still gets a token this app's own endpoint accepts, since this value
+     * is unconditionally present too - correct for today's actual
+     * single-client architecture (that "other resource server" doesn't
+     * exist as a separately-registered client this AS can distinguish by),
+     * not a lingering bug. See {@code com.apitest.oauth.AudienceValidatorTest}
+     * for direct, isolated unit coverage of the underlying rejection logic
+     * against a token that genuinely lacks this value.
+     */
+    private String selfAudience = "hello-world-api";
 
     /**
      * Fail-fast gate/entropy source for the Authorization Server's RSA
@@ -146,6 +195,14 @@ public class OAuthProperties {
 
     public void setResourceAudience(String resourceAudience) {
         this.resourceAudience = resourceAudience;
+    }
+
+    public String getSelfAudience() {
+        return selfAudience;
+    }
+
+    public void setSelfAudience(String selfAudience) {
+        this.selfAudience = selfAudience;
     }
 
     public String getSigningKeySecret() {

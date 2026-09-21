@@ -159,15 +159,39 @@ public class AuthorizationServerConfig {
 
     /**
      * NFR-19 / Handoff trap #2: stamps the configured resource-server
-     * audience onto every issued access token. Without this, Spring
+     * audience(s) onto every issued access token. Without this, Spring
      * Authorization Server emits no {@code aud} claim at all, and
      * mcp-server's audience validator would have nothing to check.
+     * <p>
+     * <b>QA-flagged gap fix (2026-09-21):</b> stamps <i>two</i> audience
+     * values, not one - {@link OAuthProperties#getResourceAudience()}
+     * ({@code mcp-server}) <i>and</i> {@link OAuthProperties#getSelfAudience()}
+     * ({@code hello-world-api}), unconditionally (deduping only if the two
+     * happen to be configured identically). Traced the actual token flow
+     * before making this call (see {@code HelloApiTools.getHelloGreeting()}
+     * in {@code mcp-server}): the single registered client's access token
+     * is used for <i>both</i> calling mcp-server's own tools <i>and</i>,
+     * via that tool's call-through, this app's own {@code GET /api/v1/hello}
+     * - the exact same token, not a second one. Per RFC 8707, {@code aud}
+     * MAY legitimately list multiple resource servers a token is valid
+     * for, so this is the correct fix (not a workaround): it lets
+     * {@code JwkConfig}'s OAuth {@code JwtDecoder} audience validator
+     * require {@code hello-world-api} specifically for this app's own
+     * endpoint - see {@link OAuthProperties#getSelfAudience()}'s Javadoc
+     * for why this is unconditional rather than folded into
+     * {@code resourceAudience} as a second comma-separated value (in
+     * short: so this fix can't regress depending on how
+     * {@code resourceAudience} happens to be configured), including the
+     * accepted trade-off that follows from that choice.
      */
     @Bean
     public OAuth2TokenCustomizer<JwtEncodingContext> jwtCustomizer(OAuthProperties oAuthProperties) {
         return context -> {
             if (OAuth2TokenType.ACCESS_TOKEN.equals(context.getTokenType())) {
-                context.getClaims().audience(List.of(oAuthProperties.getResourceAudience()));
+                List<String> audience = oAuthProperties.getResourceAudience().equals(oAuthProperties.getSelfAudience())
+                        ? List.of(oAuthProperties.getResourceAudience())
+                        : List.of(oAuthProperties.getResourceAudience(), oAuthProperties.getSelfAudience());
+                context.getClaims().audience(audience);
             }
         };
     }
