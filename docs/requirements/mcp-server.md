@@ -91,6 +91,21 @@ resource-server configuration).
 - Support for authorization servers other than `hello-world-api` (i.e.
   multi-issuer trust) — out of scope; NFR-2 explicitly requires rejecting
   tokens from any other issuer.
+  **⚠️ Related known limitation, not exploitable today (pentest finding,
+  2026-09-21):** even within this single-issuer design, `hello-world-api`'s
+  own Authorization Server (`AuthorizationServerConfig.jwtCustomizer`)
+  unconditionally stamps its own `selfAudience` onto *every* token it
+  issues, regardless of the requesting client. That means the audience
+  check on `hello-world-api`'s own `/api/v1/hello` endpoint currently
+  provides no real per-client isolation — see
+  `docs/pentest/mcp-oauth-pentest-report.md`, Finding 1, and
+  `docs/requirements/hello-world-api.md`'s NFR-19 entry for the full
+  writeup. Not a gap in `mcp-server` itself (its own NFR-2/NFR-4 audience
+  check on tokens presented to `/mcp` is unaffected), but **whoever picks
+  up "onboard a second OAuth client/resource server" as future work MUST
+  revisit `jwtCustomizer` first** — this limitation will otherwise silently
+  become a real cross-client token-replay bypass on `hello-world-api`'s
+  side the moment that happens.
 - A UI or dashboard for humans to inspect `mcp-server`'s own logs/health
   beyond the existing `check_api_health` tool and Cloud Run's own logging.
 - Rate limiting on `mcp-server`'s own `/mcp` endpoint independent of

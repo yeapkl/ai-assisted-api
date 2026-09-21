@@ -183,6 +183,27 @@ public class AuthorizationServerConfig {
      * short: so this fix can't regress depending on how
      * {@code resourceAudience} happens to be configured), including the
      * accepted trade-off that follows from that choice.
+     * <p>
+     * <b>&#9888; SECURITY LIMITATION - READ BEFORE TOUCHING THIS METHOD OR
+     * ONBOARDING A SECOND OAUTH CLIENT (pentest finding, 2026-09-21):</b>
+     * {@code selfAudience} is stamped <i>unconditionally</i> on every access
+     * token this Authorization Server issues, regardless of which client
+     * requested it or what resource it actually intends to call. With
+     * exactly one {@link RegisteredClient} in existence today
+     * ({@code mcp-server}), this means every token this AS instance ever
+     * mints already satisfies {@link AudienceValidator}'s check on this
+     * app's own {@code GET /api/v1/hello} - the audience check currently
+     * provides <b>no real per-client isolation boundary</b>, it is a no-op
+     * confirmed live by independent pentest (see
+     * {@code docs/pentest/mcp-oauth-pentest-report.md}, Finding 1). If a
+     * second OAuth client or resource server is ever registered here, this
+     * customizer MUST be revisited first - either stop stamping
+     * {@code selfAudience} unconditionally and instead mint a
+     * per-request-scoped audience (RFC 8707 {@code resource} parameter,
+     * honored server-side), or accept in writing that
+     * {@code /api/v1/hello} will keep accepting every other client's tokens
+     * too. Do not treat this check as a real isolation boundary until that
+     * is done.
      */
     @Bean
     public OAuth2TokenCustomizer<JwtEncodingContext> jwtCustomizer(OAuthProperties oAuthProperties) {

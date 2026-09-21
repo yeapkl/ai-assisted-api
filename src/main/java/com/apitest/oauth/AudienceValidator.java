@@ -21,6 +21,25 @@ import org.springframework.security.oauth2.jwt.Jwt;
  * {@code JwtAuthFilter.resolveUsernameFromOAuthToken()} already catches and
  * treats as an authentication failure - no change needed to the filter
  * itself, only to what its decoder accepts.
+ * <p>
+ * <b>&#9888; SECURITY LIMITATION - this check currently provides NO real
+ * isolation between OAuth clients (pentest finding, 2026-09-21):</b> this
+ * validator only checks that {@code aud} contains
+ * {@link OAuthProperties#getSelfAudience()} - and {@code
+ * AuthorizationServerConfig#jwtCustomizer} unconditionally stamps that same
+ * {@code selfAudience} value onto <i>every</i> token this Authorization
+ * Server instance ever issues, regardless of which client requested it.
+ * With exactly one registered OAuth client ({@code mcp-server}) in
+ * existence today, every token that reaches this validator already
+ * satisfies it by construction - it earns its keep only against a token
+ * from a genuinely different <i>issuer</i>, which already fails on
+ * signature/issuer grounds regardless. See
+ * {@code docs/pentest/mcp-oauth-pentest-report.md}, Finding 1, for the live
+ * reproduction. <b>If a second OAuth client/resource server is ever
+ * registered, this MUST be revisited</b> (either stop the unconditional
+ * {@code selfAudience} stamping and mint a per-request-scoped audience per
+ * RFC 8707, or explicitly re-accept the trade-off) before this check can be
+ * trusted as a real per-client isolation boundary.
  */
 public class AudienceValidator implements OAuth2TokenValidator<Jwt> {
 
